@@ -70,7 +70,7 @@ class SignalingClient(
                 }
             }
 
-            socket?.on("ice-candidate") { args ->
+            socket?.on("ice-candidate-received") { args ->
                 try {
                     if (args.isNotEmpty()) {
                         val data = args[0] as JSONObject
