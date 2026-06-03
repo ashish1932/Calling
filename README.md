@@ -1,3 +1,4 @@
+
 # Counseling Project
 
 A web-based counseling application featuring a dashboard user interface, patient management, and a robust clinical protocol infrastructure. 
@@ -41,4 +42,5 @@ A web-based counseling application featuring a dashboard user interface, patient
 ## Development
 
 The project uses modular JavaScript (`commonjs` configuration in package.json) and incorporates build/serve scripts to streamline the development workflow.
+
 
