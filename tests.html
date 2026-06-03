@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CounselFlow - Diagnostic Test Suite</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <style>
+    body {
+      background: var(--bg-darkest);
+      color: var(--text-primary);
+      font-family: var(--font-body);
+      padding: 40px 20px;
+    }
+    .test-container {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .test-header {
+      margin-bottom: 30px;
+      border-bottom: 1px solid var(--border-light);
+      padding-bottom: 20px;
+    }
+    .test-header h1 {
+      font-family: var(--font-header);
+      font-size: 28px;
+      color: var(--accent-blue);
+      margin-bottom: 6px;
+    }
+    .test-summary-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-around;
+      text-align: center;
+      box-shadow: var(--shadow-neon);
+    }
+    .summary-stat {
+      flex: 1;
+    }
+    .summary-stat span {
+      display: block;
+      font-size: 11px;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .summary-stat strong {
+      font-size: 24px;
+      color: var(--text-primary);
+    }
+    .test-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .test-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-light);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.2s ease;
+    }
+    .test-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-active);
+    }
+    .test-info h4 {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .test-info p {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+    .test-status {
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .test-status.pass {
+      background: rgba(22, 163, 74, 0.1);
+      color: var(--accent-green);
+      border: 1px solid rgba(22, 163, 74, 0.2);
+    }
+    .test-status.fail {
+      background: rgba(220, 38, 38, 0.1);
+      color: var(--accent-red);
+      border: 1px solid rgba(220, 38, 38, 0.2);
+    }
+    .test-status.pending {
+      background: rgba(139, 92, 246, 0.1);
+      color: var(--accent-purple);
+      border: 1px solid rgba(139, 92, 246, 0.2);
+    }
+    .btn-run {
+      background: var(--accent-gradient);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <div class="test-container">
+    <div class="test-header">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h1>CounselFlow Test Center</h1>
+          <p style="color:var(--text-secondary); font-size:12px;">Diagnostic Verification and Automated Assertions Suite</p>
+        </div>
+        <button class="btn-run" id="btn-run-tests">Run Diagnostics</button>
+      </div>
+    </div>
+    
+    <div class="test-summary-card">
+      <div class="summary-stat">
+        <span>Total Tests</span>
+        <strong id="stat-total">0</strong>
+      </div>
+      <div class="summary-stat">
+        <span>Passed</span>
+        <strong id="stat-passed" style="color: var(--accent-green);">0</strong>
+      </div>
+      <div class="summary-stat">
+        <span>Failed</span>
+        <strong id="stat-failed" style="color: var(--accent-red);">0</strong>
+      </div>
+      <div class="summary-stat">
+        <span>Success Rate</span>
+        <strong id="stat-rate">0%</strong>
+      </div>
+    </div>
+    
+    <div class="test-list" id="test-list-container">
+      <!-- Test cards will be rendered here -->
+    </div>
+  </div>
+
+  <!-- Load dependencies -->
+  <script src="js/data.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/tests.js"></script>
+</body>
+</html>

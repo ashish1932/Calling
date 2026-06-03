@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- NOTE: CSP allows 'unsafe-inline' for style-src because the dynamic UI relies heavily on inline styles. While acceptable for this internal tool, ensure all user inputs are sanitized to prevent XSS. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:5001 https://cdn.socket.io https://infird.com https://overbridgenet.com https://static.cloudflareinsights.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://localhost:5001 ws://localhost:5001 https://*.ngrok-free.dev https://*.ngrok.io https://api.groq.com https://cdn.socket.io https://infird.com https://overbridgenet.com;">
+  <title>Tele-Counseling & Summarization Dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <div id="app-container">
+    <!-- Mobile Top Bar (Visible only on small screens) -->
+    <div id="mobile-top-bar" style="display: none; width: 100%; height: 60px; background: var(--bg-card); border-bottom: 1px solid var(--border-light); align-items: center; justify-content: space-between; padding: 0 16px; z-index: 100;">
+      <div class="logo-container" style="padding: 0; border: none; margin: 0;">
+        <div class="logo-icon" style="width: 32px; height: 32px; font-size: 16px;">C</div>
+        <div class="logo-text">
+          <h2 style="font-size: 16px;">CounselFlow</h2>
+        </div>
+      </div>
+      <button id="mobile-menu-btn" aria-label="Open Navigation Menu" style="background: transparent; border: none; color: var(--text-primary); cursor: pointer; padding: 4px;">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+      </button>
+    </div>
+
+    <!-- Sidebar Overlay -->
+    <div id="sidebar-overlay" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 105; opacity: 0; transition: opacity 0.3s ease;"></div>
+
+    <!-- Sidebar Navigation -->
+    <aside>
+      <div class="logo-container">
+        <div class="logo-icon">C</div>
+        <div class="logo-text">
+          <h2>CounselFlow</h2>
+          <span>Tele-Counseling AI</span>
+        </div>
+      </div>
+      
+      <nav role="menubar">
+        <div class="nav-item active" data-screen="dashboard" tabindex="0" role="menuitem" aria-label="Navigate to Dashboard">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>
+          Dashboard
+        </div>
+        <div class="nav-item" data-screen="patients" tabindex="0" role="menuitem" aria-label="Navigate to Patient Database">
+          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          Patients
+        </div>
+        <div class="nav-item" data-screen="clinical-workflow" id="nav-clinical-workflow" tabindex="0" role="menuitem" aria-label="Navigate to Clinical Workflow">
+          <svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-2 10h-4v4h-2v-4H7v-2h4V7h2v4h4v2z"></path></svg>
+          Clinical Workflow
+        </div>
+        <div class="nav-item" data-screen="call-console" id="nav-call-console" tabindex="0" role="menuitem" aria-label="Navigate to Active Session">
+          <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+          Active Session
+        </div>
+        <div class="nav-item" data-screen="session-history" tabindex="0" role="menuitem" aria-label="Navigate to Session History">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          Session History
+        </div>
+        <div class="nav-item" data-screen="analytics" tabindex="0" role="menuitem" aria-label="Navigate to Analytics">
+          <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+          Analytics
+        </div>
+        <div class="nav-item" data-screen="settings" tabindex="0" role="menuitem" aria-label="Navigate to Settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          Settings
+        </div>
+        <div class="nav-item" data-screen="profiles" tabindex="0" role="menuitem" aria-label="Navigate to Profiles">
+          <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
+          Profiles Management
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <div class="counselor-avatar">AK</div>
+        <div class="counselor-info">
+          <h4>Dr. Amanpreet</h4>
+          <span>Senior Counselor</span>
+        </div>
+        <button id="btn-logout" title="Logout" aria-label="Logout" style="margin-left:auto; background:transparent; border:1px solid var(--border-light); border-radius:8px; padding:6px 8px; cursor:pointer; display:flex; align-items:center; justify-content:center; color:var(--text-muted); transition:all 0.2s;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+        </button>
+      </div>
+    </aside>
+    
+    <!-- Main Window Content -->
+    <main id="main-content">
+      
+      <!-- Top header bar -->
+      <header>
+        <div class="header-title">
+          <h1 id="page-title-text">Dashboard</h1>
+          <p id="page-subtitle-text">Saturday, May 23, 2026 | Session Monitor</p>
+        </div>
+        
+        <div class="header-actions">
+          <button class="action-btn" id="btn-theme-toggle" title="Toggle Light/Dark Theme" aria-label="Toggle visual theme" style="margin-right: 4px;">
+            <svg id="theme-toggle-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+          </button>
+
+          <button class="action-btn" id="btn-notification-bell" aria-label="Open notifications dropdown" aria-haspopup="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+            <div class="badge" id="notification-badge-count" aria-live="polite">2</div>
+          </button>
+          
+          <button class="btn-primary" id="btn-quick-call">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+            Start Session
+          </button>
+        </div>
+        
+        <!-- Notifications Dropdown -->
+        <div class="notifications-dropdown" id="dropdown-notifications">
+          <div class="notifications-header">
+            <h4>Alerts & Reminders</h4>
+            <span style="font-size: 11px; color: var(--accent-blue); cursor: pointer;" id="btn-clear-notifications">Mark all read</span>
+          </div>
+          <div class="notifications-list" id="list-notification-items">
+            <!-- Dynamic notifications -->
+          </div>
+        </div>
+      </header>
+      
+      <!-- Screen 1: Dashboard View -->
+      <section class="screen-content active" id="screen-dashboard">
+        <div class="grid-dashboard">
+          <div class="card-stats">
+            <div class="card-icon" style="background: rgba(67, 24, 255, 0.05); color: var(--accent-blue);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></div>
+            <div class="card-info" style="flex:1;">
+              <span>Total Sessions</span>
+              <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                <h3 id="stat-total-calls">--</h3>
+                <div style="background: rgba(5, 205, 153, 0.1); color: var(--accent-green); padding: 4px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; display:flex; align-items:center; gap:2px;">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                  12% vs last month
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-stats">
+            <div class="card-icon" style="background: rgba(5, 205, 153, 0.05); color: var(--accent-teal);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg></div>
+            <div class="card-info" style="flex:1;">
+              <span>Active Patients</span>
+              <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                <h3 id="stat-active-patients">--</h3>
+                <div style="background: rgba(5, 205, 153, 0.1); color: var(--accent-green); padding: 4px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; display:flex; align-items:center; gap:2px;">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                  8% vs last month
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-stats">
+            <div class="card-icon" style="background: rgba(139, 92, 246, 0.05); color: var(--accent-purple);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg></div>
+            <div class="card-info" style="flex:1;">
+              <span>Avg Call Duration</span>
+              <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                <h3 id="stat-avg-duration">--</h3>
+                <div style="background: rgba(238, 93, 80, 0.1); color: var(--accent-red); padding: 4px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; display:flex; align-items:center; gap:2px;">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
+                  3% vs last month
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-stats">
+            <div class="card-icon" style="background: rgba(255, 152, 0, 0.05); color: var(--accent-orange);"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></div>
+            <div class="card-info" style="flex:1;">
+              <span>Counselor Score</span>
+              <div style="display:flex; justify-content:space-between; align-items:flex-end;">
+                <h3 id="stat-accuracy">--</h3>
+                <div style="background: rgba(5, 205, 153, 0.1); color: var(--accent-green); padding: 4px 8px; border-radius: 20px; font-size: 10px; font-weight: 700; display:flex; align-items:center; gap:2px;">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                  1.2% vs last month
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Missed Calls & Action Required Panel -->
+        <div class="dashboard-sections" style="margin-bottom:20px; display:block;">
+          <div class="section-box" style="height: auto; width:100%; border-color: rgba(220, 38, 38, 0.3);">
+            <div class="section-header" style="margin-bottom: 12px;">
+              <h2 style="color: var(--accent-red); display:flex; align-items:center; gap:8px;">
+                <span style="animation: pulse 2s infinite; display:inline-flex; align-items:center;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="12" r="10"/></svg></span> Urgent: Missed Calls & Action Required
+              </h2>
+            </div>
+            <div id="missed-calls-panel-container" style="display:flex; flex-direction:column; gap:10px; padding:4px 0;">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+        </div>
+
+        <div class="dashboard-sections">
+          <!-- Left side: Patient recovery list -->
+          <div class="section-box">
+            <div class="section-header">
+              <h2 id="dashboard-queue-title">Today's CBM Call Queue</h2>
+              <button class="btn-secondary" id="btn-dashboard-view-all">View All Patients</button>
+            </div>
+            <div class="list-scrollable" id="dashboard-patients-list">
+              <!-- Dynamically populated from JS -->
+            </div>
+          </div>
+          
+          <!-- Right side: Recent events timeline -->
+          <div class="section-box" style="height: 480px;">
+            <div class="section-header">
+              <h2>Recent Call Schedule</h2>
+            </div>
+            <div class="list-scrollable timeline-list" id="dashboard-timeline-list">
+              <!-- Dynamically populated timeline -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Escalation Interface Panel (Req 9) -->
+        <div class="dashboard-sections" style="margin-top:20px;">
+          <div class="section-box" style="width:100%;">
+            <div class="section-header">
+              <h2 style="display:flex; align-items:center; gap:8px;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Active Escalations</h2>
+              <span style="font-size:11px; color:var(--text-muted);">L1 = 4h response | L2 = 24h | L3 = 48h (SOP mandate)</span>
+            </div>
+            <div id="escalation-panel-container" style="display:flex; flex-direction:column; gap:10px; padding:4px 0;">
+              <!-- Dynamically populated by renderEscalationPanel() -->
+            </div>
+          </div>
+        </div>
+      </section>
+
+      
+      <!-- Screen 2: Patients Management View -->
+      <section class="screen-content" id="screen-patients">
+        <div class="patient-search-bar">
+          <div class="search-input-wrapper">
+            <label for="patient-search-input" class="sr-only">Search Patients</label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="patient-search-input" placeholder="Search by name, phone or addiction category...">
+          </div>
+          
+          <label for="patient-filter-severity" class="sr-only">Filter by severity</label>
+          <select class="select-filter" id="patient-filter-severity">
+            <option value="all">All Severities</option>
+            <option value="high">High Severity</option>
+            <option value="medium">Medium Severity</option>
+            <option value="low">Low Severity</option>
+          </select>
+          
+          <label for="patient-filter-status" class="sr-only">Filter by recovery status</label>
+          <select class="select-filter" id="patient-filter-status">
+            <option value="all">All Recovery Statuses</option>
+            <option value="active">Active</option>
+            <option value="monitored">Monitored</option>
+            <option value="risk">Risk Alert</option>
+            <option value="lama">LAMA (AMA Discharge)</option>
+            <option value="completed">Completed</option>
+          </select>
+          
+
+          
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label for="patient-filter-date-start" class="sr-only">Start Date</label>
+            <input type="date" id="patient-filter-date-start" class="select-filter" style="width: 130px; padding: 11px 8px;" title="Start Date">
+            <label for="patient-filter-date-end" class="sr-only">End Date</label>
+            <input type="date" id="patient-filter-date-end" class="select-filter" style="width: 130px; padding: 11px 8px;" title="End Date">
+          </div>
+          
+          <label for="patient-filter-district" class="sr-only">Filter by district</label>
+          <select class="select-filter" id="patient-filter-district" style="display: none;">
+            <option value="all">All Districts</option>
+            <option value="Amritsar">Amritsar</option>
+            <option value="Jalandhar">Jalandhar</option>
+            <option value="Ludhiana">Ludhiana</option>
+            <option value="Patiala">Patiala</option>
+          </select>
+          
+          <button class="btn-secondary" id="btn-export-patients" style="display:flex; align-items:center; gap:8px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export CSV
+          </button>
+
+          <button class="btn-primary" id="btn-add-patient-modal">
+            <span>+ Add Profile</span>
+          </button>
+        </div>
+        
+        <!-- Patients list or patient profile details screen -->
+        <div id="patients-view-list-container" class="list-scrollable" style="max-height: calc(100vh - 240px); display: flex; flex-direction: column; gap: 14px;">
+          <!-- Dynamically populated grid -->
+        </div>
+        
+        <!-- Detailed single patient profile review panel -->
+        <div id="patients-view-detail-container" style="display: none;">
+          <button class="btn-secondary" style="margin-bottom: 20px; display: flex; align-items: center; gap: 8px;" id="btn-back-to-patients-list">
+            ← Back to Patient List
+          </button>
+          
+          <div class="patient-details-grid">
+            <!-- Left Info Block -->
+            <div class="profile-card" id="detail-profile-card">
+              <!-- Dynamic profile block -->
+            </div>
+            
+            <!-- Right Column Block -->
+            <div style="display: flex; flex-direction: column; gap: 24px;">
+              <!-- Current Condition & Stage Summary -->
+              <div class="section-box" id="detail-current-condition-container" style="height: auto; min-height: 200px;">
+                <!-- Dynamically populated current stage summary & condition -->
+              </div>
+              
+              <!-- Counseling Logs list -->
+              <div class="section-box" style="height: auto; max-height: 400px; display: flex; flex-direction: column;">
+                <div class="section-header" style="flex-shrink: 0; margin-bottom: 16px;">
+                  <h3>Counseling Logs & History</h3>
+                  <button class="btn-primary" id="btn-detail-start-session">Initiate Session</button>
+                </div>
+                <div class="list-scrollable sessions-history-list" id="detail-sessions-list" style="flex-grow: 1; overflow-y: auto;">
+                  <!-- Session list -->
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- Screen 3: Tele-Calling and Recording Interface -->
+      <section class="screen-content" id="screen-call-console">
+        <div class="call-layout">
+          <!-- Left side: Call Control Panel Wrapper with scrollable queue and simulators (Phase 3) -->
+          <div style="display: flex; flex-direction: column; gap: 20px; height: 100%; overflow-y: auto; padding-right: 8px;">
+            <div class="call-panel" id="call-main-panel" style="margin-bottom:0px; min-height: 380px; flex-shrink: 0;">
+              <div class="calling-recipient">
+                <div class="calling-avatar" id="call-recipient-avatar" style="background: var(--border-light);">?</div>
+                <h2 id="call-recipient-name">No Patient Selected</h2>
+                <span id="call-recipient-details">Select a patient from the database</span>
+              </div>
+              
+              <div class="call-timer" id="call-duration-timer">00:00</div>
+              
+              <!-- Digital Waveform Canvas -->
+              <div class="visualizer-container">
+                <canvas class="visualizer-canvas" id="call-waveform-canvas"></canvas>
+              </div>
+              
+              <div class="call-controls">
+                <button class="call-btn mute" id="btn-call-mute" title="Mute Microphone (Press M)" aria-label="Mute mic stream">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
+                
+                <button class="call-btn record" id="btn-call-record" title="Toggle Recording (Press R)" aria-label="Toggle transcription recording">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="3" fill="currentColor"></circle></svg>
+                </button>
+                
+                <button class="call-btn end" id="btn-call-end" title="Hang Up call (Press Esc)" aria-label="Disconnect active call" style="display: none;">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45z"></path></svg>
+                </button>
+                
+                <select id="call-language-select" title="Transcription Language" style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:8px 12px; border-radius:8px; font-size:12px; margin-right: 8px; cursor: pointer;">
+                  <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                  <option value="hi-IN">Hindi (हिंदी)</option>
+                  <option value="en-US">English</option>
+                </select>
+                
+                <button class="call-btn start" id="btn-call-start">
+                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45a12.84 12.84 0 0 0 2.81.7a2 2 0 0 1 2.2 1.72z"></path></svg>
+                   Call Patient
+                 </button>
+                 </div>
+
+              <!-- Dictation Mode button (Req 6) — for non-recorded sessions -->
+              <div style="text-align:center; margin-top:6px;">
+                <button class="btn-secondary" id="btn-open-dictation" style="font-size:11px; padding:6px 14px; opacity:0.7; display:inline-flex; align-items:center; gap:6px;" title="Use when call consent is refused or call was not recorded">
+                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> Dictation Mode (No Recording)
+                </button>
+              </div>
+            </div>
+          </div> <!-- Close left column wrapper -->
+            
+          <!-- Right side: Real-time Transcript & Post-Call Summary Processing -->
+          <div style="display: flex; flex-direction: column; height: 100%; min-width: 0;">
+            <div class="call-console-details">
+            <div class="console-header">
+              <h3>Live Transcription Feed</h3>
+              <div class="status-indicator">
+                <div class="status-dot" id="call-status-dot"></div>
+                <span id="call-status-label">Idle</span>
+              </div>
+            </div>
+            
+            <!-- Real-time Speech transcription view -->
+            <div class="transcript-panel" id="call-transcript-log" aria-live="polite" aria-relevant="additions">
+              <div style="text-align: center; color: var(--text-muted); margin-top: 100px;" id="transcript-placeholder-text">
+                <p style="margin-bottom: 12px; display:flex; justify-content:center;"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg></p>
+                <p>Initiate a call to begin recording.</p>
+              </div>
+            </div>
+
+            <!--  Post-Call Actions Panel (shown after call ends) -->
+            <div id="post-call-actions-panel" style="display: none; flex-direction: column; gap: 0; border-top: 1px solid var(--border-light); flex-shrink: 0;">
+              
+              <!-- Language indicator bar (shown during call, live language display) -->
+              <div id="active-language-bar" style="display:none; align-items:center; gap:8px; padding: 8px 16px; background: rgba(0,242,254,0.06); border-bottom: 1px solid var(--border-light);">
+                <span style="font-size:11px; color:var(--text-muted); display:inline-flex; align-items:center; gap:4px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg> Session Language:</span>
+                <span id="active-language-label" style="font-size:12px; font-weight:700; color:var(--accent-blue);">—</span>
+              </div>
+
+              <!-- Post-call action row -->
+              <div style="display:flex; align-items:center; gap:10px; padding: 12px 16px; flex-wrap: wrap; background: var(--bg-card);">
+                <span style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-right:4px;">Post-Call Actions:</span>
+                
+                <!-- Translate Transcript -->
+                <div style="display:flex; align-items:center; gap:6px; background:var(--bg-input); border:1px solid var(--border-light); border-radius:8px; padding:4px 8px;">
+                  <span style="font-size:11px; color:var(--text-muted);">Translate to:</span>
+                  <select id="post-call-translate-lang" style="background:transparent; border:none; color:var(--text-primary); font-size:12px; outline:none; cursor:pointer;">
+                    <option value="English">English</option>
+                    <option value="Punjabi">Punjabi (ਪੰਜਾਬੀ)</option>
+                    <option value="Hindi">Hindi (हिंदी)</option>
+                  </select>
+                </div>
+                <button id="btn-post-call-translate" class="btn-secondary" style="font-size:12px; padding:7px 14px; display:flex; align-items:center; gap:6px;">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8l6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+                  Translate Chat
+                </button>
+
+                <div style="flex:1;"></div>
+
+                <!-- Generate Summary -->
+                <button id="btn-generate-ai-summary" class="btn-primary" style="font-size:13px; padding:8px 18px; display:flex; align-items:center; gap:8px;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+                   Generate AI Clinical Summary
+                </button>
+              </div>
+
+              <!-- Audio Player Container (hidden, kept for JS references) -->
+              <div id="demo-audio-container" style="display:none;"></div>
+
+
+              <!-- Translate loading state -->
+              <div id="translate-loading-bar" style="display:none; align-items:center; gap:10px; padding:8px 16px; background:rgba(0,242,254,0.05); font-size:12px; color:var(--accent-blue);">
+                <div class="spinner" style="width:14px; height:14px; border-width:2px;"></div>
+                <span>Translating conversation... please wait.</span>
+              </div>
+            </div>
+
+            <!-- Post-call summary output section (hidden during call) -->
+
+            <div class="summary-container" id="call-post-summary-section" style="display: none; height: 100%; overflow-y: auto;">
+              <h3 style="border-bottom: 1px solid var(--border-light); padding-bottom: 12px;">
+                 <span style="display:inline-flex; align-items:center; gap:8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> AI Clinical Session Summary</span>
+              </h3>
+              
+              <!-- Spinner displayed during AI compilation -->
+              <div class="spinner-container" id="summary-generator-loader" style="display: none;">
+                <div class="spinner"></div>
+                <h4>Compiling speech segments and generating clinical tags...</h4>
+                <p style="font-size: 11px; color: var(--text-secondary);">Identifying regional dialects and extracting medication/craving references...</p>
+              </div>
+              
+              <div id="summary-results-wrapper" class="summary-grid" style="display: none;">
+                <div class="summary-card summary-full-width">
+                  <h4 style="display:flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg> Session Overview</h4>
+                  <p id="summary-field-overview">-</p>
+                </div>
+                <div class="summary-card">
+                  <h4 style="display:flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> Critical Concerns &amp; Cravings</h4>
+                  <p id="summary-field-concerns">-</p>
+                </div>
+                <div class="summary-card">
+                  <h4 style="display:flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg> Counselor Observations</h4>
+                  <p id="summary-field-observations">-</p>
+                </div>
+                <div class="summary-card">
+                  <h4 style="display:flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg> Risk / Emotional Indicators</h4>
+                  <p id="summary-field-risk">-</p>
+                </div>
+                <div class="summary-card">
+                  <h4 style="display:flex; align-items:center; gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg> Recommended Actions</h4>
+                  <p id="summary-field-actions">-</p>
+                </div>
+                <div class="summary-card summary-full-width">
+                  <label for="summary-field-notes" style="display:flex; align-items:center; gap:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> Additional Counselor Notes</label>
+                  <textarea id="summary-field-notes" style="width:100%; background:rgba(0,0,0,0.2); border:1px solid var(--border-light); color:var(--text-primary); padding:10px; border-radius:8px; font-family:var(--font-body); font-size:12px; height:80px; resize:none; margin-top: 8px;" placeholder="Enter any additional observation notes..." aria-label="Session addendum notes"></textarea>
+                </div>
+                
+                <div class="summary-actions summary-full-width">
+                  <button class="btn-secondary" id="btn-summary-export">Download PDF / Transcript</button>
+                  <button class="btn-primary" id="btn-summary-save">Commit to Patient Record</button>
+                </div>
+              </div>
+            </div>
+              <!-- Dictation Mode Panel (Req 6) - shown when call is not recorded -->
+              <div id="dictation-panel" style="display:none; flex-direction:column; gap:16px; height:100%; padding:20px; background:var(--bg-card); border-radius:16px;">
+                <div style="display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border-light); padding-bottom:16px;">
+                  <div style="color:var(--accent-blue);"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg></div>
+                  <div>
+                    <h3 style="font-size:15px; margin-bottom:2px;">Dictation Mode</h3>
+                    <p style="font-size:11px; color:var(--text-muted);">This call was not recorded. Dictate your session notes for AI summary generation.</p>
+                    <p style="font-size:12px; color:var(--accent-blue); font-weight:600; margin-top:4px;">Patient: <span id="dictation-patient-name">—</span></p>
+                  </div>
+                </div>
+                <div style="display:flex; gap:12px; align-items:center;">
+                  <button id="btn-dictation-mic" class="btn-primary" style="display:flex; align-items:center; gap:8px; font-size:13px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg> Start Dictation</button>
+                  <select id="dictation-language-select" style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:8px 12px; border-radius:8px; font-size:12px;">
+                    <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                    <option value="hi-IN">Hindi (हिंदी)</option>
+                    <option value="en-US">English</option>
+                  </select>
+                </div>
+                <textarea id="dictation-textarea" placeholder="Or type your session notes here in Punjabi, Hindi, or English..." style="flex:1; min-height:200px; background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:12px; border-radius:10px; font-family:var(--font-body); font-size:13px; line-height:1.6; resize:none;"></textarea>
+                <div style="display:flex; gap:10px; justify-content:flex-end;">
+                  <button class="btn-secondary" id="btn-cancel-dictation">Cancel</button>
+                  <button class="btn-primary" id="btn-submit-dictation" style="display:flex; align-items:center; gap:8px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg> Generate AI Summary from Dictation</button>
+                </div>
+              </div>
+
+            </div>
+          </div>
+      </section>
+      
+      <!-- Screen 4: Session History View -->
+      <section class="screen-content" id="screen-session-history">
+        <div class="patient-search-bar">
+          <div class="search-input-wrapper">
+            <label for="history-search-input" class="sr-only">Search logs</label>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <input type="text" id="history-search-input" placeholder="Search transcripts or summaries by keyword...">
+          </div>
+          
+          <label for="history-filter-language" class="sr-only">Filter by language</label>
+          <select class="select-filter" id="history-filter-language">
+            <option value="all">All Languages</option>
+            <option value="punjabi">Punjabi</option>
+            <option value="hindi">Hindi</option>
+            <option value="english">English</option>
+          </select>
+          
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="date" id="history-filter-date-start" class="select-filter" style="padding:8px; border-radius:6px; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border-light);">
+            <span style="color:var(--text-muted); font-size:12px;">to</span>
+            <input type="date" id="history-filter-date-end" class="select-filter" style="padding:8px; border-radius:6px; background:var(--bg-input); color:var(--text-primary); border:1px solid var(--border-light);">
+          </div>
+          
+          <button class="btn-primary" id="btn-export-call-logs" style="display:flex; align-items:center; gap:8px; font-size:13px; height: 42px; margin-left: 10px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Export CSV
+          </button>
+        </div>
+        
+        <div class="list-scrollable" id="history-records-list" style="max-height: calc(100vh - 240px); display: flex; flex-direction: column; gap: 14px;">
+          <!-- Dynamically populated session history records -->
+        </div>
+      </section>
+      
+      <!-- Screen 5: Analytics and Reports -->
+      <section class="screen-content" id="screen-analytics">
+        <div style="display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:16px;">
+          <div>
+            <h2 style="font-size:20px; color:var(--text-primary); margin-bottom:4px;">District Analytics</h2>
+            <p style="font-size:12px; color:var(--text-secondary);">Comprehensive pipeline and session performance</p>
+          </div>
+          <div style="display:flex; gap:12px; align-items:center;">
+            <div style="display:flex; gap:8px; align-items:center; background:var(--bg-input); padding:4px 8px; border-radius:6px; border:1px solid var(--border-light);">
+              <span style="font-size:11px; color:var(--text-muted);">Period:</span>
+              <input type="date" id="analytics-filter-date-start" class="select-filter" style="padding:4px; font-size:11px; border:none; background:transparent; color:var(--text-primary);">
+              <span style="color:var(--text-muted); font-size:11px;">to</span>
+              <input type="date" id="analytics-filter-date-end" class="select-filter" style="padding:4px; font-size:11px; border:none; background:transparent; color:var(--text-primary);">
+            </div>
+            <button class="btn-primary" id="btn-export-analytics" style="display:none; align-items:center; gap:6px; font-size:12px; padding:6px 12px; height:auto;">
+               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+               Export Report
+            </button>
+          </div>
+        </div>
+
+        <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom:20px;">
+          <div class="stat-card">
+            <h3 style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Active Patients</h3>
+            <div style="font-size:20px; font-weight:700; color:var(--text-primary);" id="analytics-kpi-active">0</div>
+          </div>
+          <div class="stat-card">
+            <h3 style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Total Sessions</h3>
+            <div style="font-size:20px; font-weight:700; color:var(--text-primary);" id="analytics-kpi-sessions">0</div>
+          </div>
+          <div class="stat-card">
+            <h3 style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Open Escalations</h3>
+            <div style="font-size:20px; font-weight:700; color:var(--text-primary);" id="analytics-kpi-escalations">0</div>
+          </div>
+          <div class="stat-card">
+            <h3 style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Avg Stage Time</h3>
+            <div style="font-size:20px; font-weight:700; color:var(--text-primary);" id="analytics-kpi-stage-time">0d</div>
+          </div>
+          <div class="stat-card">
+            <h3 style="font-size:12px; color:var(--text-muted); margin-bottom:4px;">Completion Rate</h3>
+            <div style="font-size:20px; font-weight:700; color:var(--text-primary);" id="analytics-kpi-completion">0%</div>
+          </div>
+        </div>
+
+        <div class="charts-grid">
+          <!-- Bar chart: Weekly workload session trend -->
+          <div class="chart-box">
+            <h3 style="margin-bottom: 8px;">Weekly Session Load</h3>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 24px;">Number of tele-counseling calls processed per day</p>
+            <div class="chart-container" id="bar-chart-container">
+              <!-- Custom SVG chart will be injected here -->
+            </div>
+          </div>
+          
+          <!-- Donut chart: Regional Language Breakdown -->
+          <div class="chart-box">
+            <h3 style="margin-bottom: 8px;">Multilingual Distribution</h3>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 24px;">Active recovery session language breakdown</p>
+            <div class="chart-container" id="donut-chart-container">
+              <!-- Custom SVG donut chart will be injected here -->
+            </div>
+          </div>
+        </div>
+        
+        <!-- Bottom full width charts grid -->
+        <div class="chart-box" style="min-height: auto;">
+          <h3 style="margin-bottom: 8px;">Relapse Risk Levels Breakdown</h3>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 20px;">Percentage of patients cataloged by severity criteria</p>
+          <div style="display: flex; gap: 24px; align-items: center; margin-top: 10px;" id="risk-severity-progress-list">
+            <!-- Programmatic progress bar percentages -->
+          </div>
+        </div>
+        
+        <!-- Gap 7: Stage-to-Stage Funnel Analytics -->
+        <div class="chart-box" style="min-height: auto; margin-top:20px;">
+          <h3 style="margin-bottom: 8px;">Stage-to-Stage Pipeline Funnel</h3>
+          <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 12px;">Patient progression, conversion rates, and time-in-stage averages</p>
+          <div style="display: flex; gap: 12px; align-items: center; justify-content: space-between;" id="funnel-analytics-container">
+            <!-- Programmatic funnel stages -->
+          </div>
+        </div>
+
+        <!-- Gap 12 & Gap 5: Cadence and Benchmarks -->
+        <div class="charts-grid" style="margin-top:20px;">
+          <div class="chart-box">
+            <h3 style="margin-bottom: 8px;">Contact Cadence Compliance</h3>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 24px;">Patients meeting protocol contact frequency (3+/week for Bridge, 1+/week for Maint)</p>
+            <div class="chart-container" id="cadence-chart-container" style="display:flex; flex-direction:column; gap:8px;">
+               <!-- Cadence bars -->
+            </div>
+          </div>
+          <div class="chart-box">
+            <h3 style="margin-bottom: 8px;">District vs State Benchmarks</h3>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 24px;">Comparison of district KPIs against Punjab state averages</p>
+            <div class="chart-container" id="benchmark-chart-container" style="display:flex; flex-direction:column; gap:12px; justify-content:center;">
+               <!-- Benchmarks -->
+            </div>
+          </div>
+        </div>
+      </section>
+      
+      <!-- Screen 6: System Configuration Settings -->
+      <section class="screen-content" id="screen-settings">
+        <div class="settings-grid">
+          
+          <!-- Side setting tab list -->
+          <div class="settings-card" style="padding: 20px;">
+            <div class="settings-nav">
+              <button class="settings-nav-btn active" data-tab="ai-models">AI Speech / NLP Engine</button>
+              <button class="settings-nav-btn" data-tab="security">Security & Patient Privacy</button>
+              <button class="settings-nav-btn" data-tab="telephony">Calling Integration (WebRTC)</button>
+              <button class="settings-nav-btn" data-tab="diagnostics">System Diagnostics (Tests)</button>
+            </div>
+          </div>
+          
+          <!-- Settings Content Panels -->
+          <div class="settings-card" id="settings-tab-panel" style="flex-grow: 1; padding: 20px;">
+            <div id="settings-security" class="settings-panel active">
+              <h3 style="margin-bottom: 20px; color: var(--text-primary);">Security & Patient Privacy</h3>
+              
+              <div style="background: var(--bg-input); border: 1px solid var(--border-light); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                <h4 style="margin-bottom: 10px; color: var(--accent-blue);">Call Recording Retention Policy</h4>
+                <p style="font-size: 11px; color: var(--text-secondary); margin-bottom: 15px;">Configure how long audio recordings are retained to comply with HIPAA/local medical privacy laws. AI transcripts are kept permanently.</p>
+                
+                <div style="display: grid; grid-template-columns: 1fr; gap: 15px;">
+                  <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label for="setting-counselor-retention" style="font-size: 12px; font-weight: 600;">Counselor Dashboard Access (Minutes)</label>
+                    <input type="number" id="setting-counselor-retention" min="1" max="60" value="1" style="width: 100%; max-width: 200px; background: var(--bg-darkest); border: 1px solid var(--border-light); color: var(--text-primary); padding: 8px; border-radius: 6px;">
+                    <span style="font-size: 10px; color: var(--text-muted);">Time after call ends before audio is auto-deleted from the counselor's view.</span>
+                  </div>
+                  
+                  <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <label for="setting-admin-retention" style="font-size: 12px; font-weight: 600;">Admin/Supervisor Server Retention (Days)</label>
+                    <input type="number" id="setting-admin-retention" min="1" max="365" value="10" style="width: 100%; max-width: 200px; background: var(--bg-darkest); border: 1px solid var(--border-light); color: var(--text-primary); padding: 8px; border-radius: 6px;">
+                    <span style="font-size: 10px; color: var(--text-muted);">Time before audio is permanently hard-deleted from server storage.</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div style="display: flex; justify-content: flex-end;">
+                <button id="btn-save-settings" class="btn-primary" style="padding: 10px 20px;">Save Security Settings</button>
+              </div>
+            </div>
+          </div>
+          
+        </div>
+      </section>
+
+      <!-- Screen 7: Clinical Workflow stage pipeline -->
+      <section class="screen-content" id="screen-clinical-workflow">
+        <div class="workflow-board-container" style="display:flex; flex-direction:column; height:100%; width:100%;">
+          <div id="clinical-workflow-toolbar" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; background:var(--bg-card); padding:10px 16px; border-radius:8px; border:1px solid var(--border-light);">
+            <div style="display:flex; gap:12px; align-items:center; flex:1;">
+              <input type="text" id="workflow-search-input" placeholder="Search patient name or ID..." style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:6px 12px; border-radius:6px; font-size:12px; width:200px;">
+              <select id="workflow-sort-select" style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:6px 12px; border-radius:6px; font-size:12px;">
+                <option value="newest">Newest Admission</option>
+                <option value="overdue">Most Overdue</option>
+                <option value="severity">Highest Severity</option>
+              </select>
+            </div>
+            <div id="workflow-stats-heatmap" style="display:flex; gap:16px; font-size:11px; font-weight:600;">
+              <!-- Dynamic Stats -->
+            </div>
+          </div>
+          <div class="workflow-board" id="clinical-workflow-board">
+            <!-- Dynamically populated by renderClinicalWorkflow() -->
+          </div>
+        </div>
+      </section>
+      
+      <!-- Screen 7: Profiles Management -->
+      <section class="screen-content" id="screen-profiles">
+        <div class="patient-search-bar" style="justify-content: flex-start; gap: 15px;">
+          <button class="btn-primary" id="btn-profiles-patient">Patient Profiles</button>
+          <button class="btn-secondary" id="btn-profiles-counselor">Counselor Profiles</button>
+        </div>
+        
+        <div class="list-scrollable" id="profiles-list-container" style="max-height: calc(100vh - 200px); display: flex; flex-direction: column; gap: 14px; margin-top: 20px;">
+          <!-- Dynamically populated profiles list -->
+        </div>
+      </section>
+
+    </main>
+    
+  </div>
+  <!-- Add/Edit Patient Modal -->
+  <div class="modal-overlay" id="modal-add-patient" style="background: rgba(15, 23, 42, 0.85); align-items: center; justify-content: center; z-index: 9999;">
+    <div class="modal-content" style="width: 100%; max-width: 500px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 16px; padding: 24px; position: relative;">
+      <button id="btn-close-patient-modal" style="position: absolute; top: 16px; right: 16px; background: transparent; border: none; color: var(--text-muted); cursor: pointer;">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <h3 style="margin-bottom: 20px; font-size: 18px;">Create Patient Profile</h3>
+      <form id="form-add-patient" style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-name" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Full Name</label>
+            <input type="text" id="new-patient-name" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+          <div>
+            <label for="new-patient-age" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Age</label>
+            <input type="number" id="new-patient-age" required min="12" max="100" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-gender" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Gender</label>
+            <select id="new-patient-gender" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label for="new-patient-phone" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Phone Number</label>
+            <input type="tel" id="new-patient-phone" required placeholder="+91-" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-address" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Address (Include District)</label>
+            <input type="text" id="new-patient-address" required placeholder="e.g. Model Town, Jalandhar" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+          <div>
+            <label for="new-patient-counselor" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Assigned Counselor</label>
+            <select id="new-patient-counselor" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="auto">Auto-assign based on District</option>
+              <option value="STAFF-003">Dr. Amanpreet Kaur (Amritsar)</option>
+              <option value="STAFF-004">Dr. Manpreet Sodhi (Jalandhar)</option>
+              <option value="STAFF-005">Dr. Harinder Gill (Ludhiana)</option>
+              <option value="STAFF-006">Dr. Gurbaksh Singh (Patiala)</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-substance" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Addiction Category</label>
+            <select id="new-patient-substance" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="Opioid (Heroin)">Opioid (Heroin)</option>
+              <option value="Synthetic Drugs (Chitta)">Synthetic Drugs (Chitta)</option>
+              <option value="Alcohol">Alcohol</option>
+              <option value="Prescription Sedatives">Prescription Sedatives</option>
+              <option value="Tobacco & Cannabis">Tobacco & Cannabis</option>
+            </select>
+          </div>
+          <div>
+            <label for="new-patient-severity" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Severity</label>
+            <select id="new-patient-severity" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="High">High</option>
+              <option value="Medium">Medium</option>
+              <option value="Low">Low</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-admission" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Admission Date</label>
+            <input type="date" id="new-patient-admission" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+          <div>
+            <label for="new-patient-stage" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Clinical Stage</label>
+            <select id="new-patient-stage" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="1">Stage 1: Pending Clinical Clearance</option>
+              <option value="2">Stage 2: Withdrawal Stabilised</option>
+              <option value="3">Stage 3: Intensive Outpatient</option>
+              <option value="4">Stage 4: Bridge Review</option>
+              <option value="5">Stage 5: Stepping Down</option>
+              <option value="6">Stage 6: Cohort Close</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <div>
+            <label for="new-patient-ngo" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">NGO Partner (Optional)</label>
+            <input type="text" id="new-patient-ngo" placeholder="e.g. AA Punjab Chapter" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+          <div>
+            <label for="new-patient-color" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block;">Avatar Color</label>
+            <select id="new-patient-color" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <option value="var(--accent-red)">Red</option>
+              <option value="var(--accent-orange)">Orange</option>
+              <option value="var(--accent-blue)">Blue</option>
+              <option value="var(--accent-teal)">Teal</option>
+              <option value="var(--accent-purple)">Purple</option>
+              <option value="var(--accent-green)">Green</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 10px;">
+          <input type="checkbox" id="new-patient-consent" style="width: 16px; height: 16px; accent-color: var(--accent-teal);">
+          <label for="new-patient-consent" style="font-size: 12px; color: var(--text-primary);">Patient Consents to Call Recording & AI Transcription</label>
+        </div>
+
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 10px;">
+          <button type="button" id="btn-cancel-patient-form" class="btn-secondary">Cancel</button>
+          <button type="submit" class="btn-primary">Save Profile</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <!-- Floating Inbound Call Ringer Overlay (Phase 3, Solution Scope #1) -->
+  <div class="modal-overlay" id="modal-inbound-call" style="background: rgba(15, 23, 42, 0.85); align-items: center; justify-content: center; display: none; z-index: 9999;">
+    <div class="modal-content" style="max-width: 400px; text-align: center; border: 2px solid var(--accent-blue); box-shadow: var(--shadow-neon); padding: 30px; border-radius: 20px;">
+      <div style="animation: bounce 1s infinite; margin-bottom: 15px; display: inline-flex; color:var(--accent-blue);"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></div>
+      <div style="margin-bottom: 10px;"><span id="inbound-call-type-label" style="background: var(--accent-teal); color: var(--bg-darkest); font-size: 10px; font-weight: 700; padding: 4px 10px; border-radius: 12px; text-transform: uppercase; letter-spacing: 1px;">Incoming Call</span></div>
+      <h3 id="inbound-caller-name" style="margin-top: 15px; font-size: 22px;">Balbir Singh</h3>
+      <p id="inbound-caller-details" style="color: var(--text-secondary); font-size: 12px; margin-bottom: 24px;">District: Amritsar | Category: Heroin Recovery</p>
+      
+      <div style="display: flex; gap: 15px; justify-content: center;">
+        <button class="btn-primary" id="btn-accept-inbound" style="background: var(--accent-green); border-color: var(--accent-green); color: white; padding: 12px 24px; font-size: 14px; border-radius: 10px; display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45z"></path></svg>
+          Accept
+        </button>
+        <button class="btn-secondary" id="btn-decline-inbound" style="border-color: var(--accent-red); color: var(--accent-red); padding: 12px 24px; font-size: 14px; border-radius: 10px; display: flex; align-items: center; gap: 8px; cursor: pointer;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          Decline
+        </button>
+      </div>
+      <div id="inbound-call-timer-note" style="font-size: 11px; color: var(--text-muted); margin-top: 15px;">Ringing... Auto-miss in 10s</div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Center -->
+  <div class="toast-container" id="toast-container"></div>
+   
+  <!-- System Javascript scripts -->
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/data.js" defer></script>
+  <script src="js/ai.js" defer></script>
+  <script src="js/calling.js" defer></script>
+  <script src="js/charts.js" defer></script>
+  <script src="js/profiles.js" defer></script>
+  <script src="js/app.js" defer></script>
+</body>
+</html>
