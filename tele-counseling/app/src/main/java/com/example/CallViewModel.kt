@@ -1,6 +1,8 @@
 package com.example
 
 import android.app.Application
+import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -23,10 +25,16 @@ enum class CallState {
 
 class CallViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _serverUrl = MutableStateFlow("http://10.0.2.2:5001")
+    private val prefs: SharedPreferences = application.getSharedPreferences("AppPreferences", Context.MODE_PRIVATE)
+
+    private val _serverUrl = MutableStateFlow(
+        prefs.getString("serverUrl", "https://economist-slideshow-flannels.ngrok-free.dev") ?: "https://economist-slideshow-flannels.ngrok-free.dev"
+    )
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
-    private val _patientId = MutableStateFlow("PT-001")
+    private val _patientId = MutableStateFlow(
+        prefs.getString("patientId", "PT-001") ?: "PT-001"
+    )
     val patientId: StateFlow<String> = _patientId.asStateFlow()
 
     private val _callState = MutableStateFlow(CallState.IDLE)
@@ -53,6 +61,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         addLog("Application ready. Configure backend server url to start client.")
+        if (prefs.getBoolean("isLoggedIn", false)) {
+            addLog("Auto-login triggered. Resuming session...")
+            connect()
+        }
     }
 
     fun updateServerUrl(url: String) {
@@ -79,6 +91,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             addLog("Error: Server URL and Patient ID cannot be empty.")
             return
         }
+
+        // Save preferences to remain logged in
+        prefs.edit()
+            .putString("serverUrl", _serverUrl.value)
+            .putString("patientId", _patientId.value)
+            .putBoolean("isLoggedIn", true)
+            .apply()
 
         _callState.value = CallState.CONNECTING
         addLog("Connecting to signaling server at ${_serverUrl.value}...")
@@ -199,6 +218,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        // Clear persistent login flag so user must sign in manually next time
+        prefs.edit().putBoolean("isLoggedIn", false).apply()
+
         timerJob?.cancel()
         timerJob = null
         
