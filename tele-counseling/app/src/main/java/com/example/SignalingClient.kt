@@ -24,14 +24,7 @@ class SignalingClient(
     fun connect() {
         var formattedUrl = backendUrl.trim()
         
-        // Ensure ws/signaling is treated as the correct namespace/path
-        if (!formattedUrl.contains("/ws/signaling")) {
-            formattedUrl = if (formattedUrl.endsWith("/")) {
-                "${formattedUrl}ws/signaling"
-            } else {
-                "${formattedUrl}/ws/signaling"
-            }
-        }
+        // Use the raw URL for Socket.IO, as Node.js backend uses root namespace
 
         clientListener.onConnectionStatusChanged("Signaling: Connecting to $formattedUrl...")
         
