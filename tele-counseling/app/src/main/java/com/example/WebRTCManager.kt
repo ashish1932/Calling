@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Context
+import android.media.AudioManager
 import android.util.Log
 import org.webrtc.*
 
@@ -19,6 +20,9 @@ class WebRTCManager(
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
     private var localAudioSource: AudioSource? = null
+    private var audioManager: AudioManager? = null
+    private var previousAudioMode: Int = AudioManager.MODE_NORMAL
+    private var previousSpeakerphoneOn: Boolean = false
 
     init {
         try {
@@ -114,6 +118,16 @@ class WebRTCManager(
 
             listener.onWebRTCLog("WebRTC: RTCPeerConnection created.")
 
+            // Configure AudioManager for VoIP and Speakerphone
+            audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager?.let { am ->
+                previousAudioMode = am.mode
+                previousSpeakerphoneOn = am.isSpeakerphoneOn
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                am.isSpeakerphoneOn = true
+                listener.onWebRTCLog("WebRTC: AudioManager configured for speakerphone.")
+            }
+
             // Set up local audio track and add it as a modern track API
             localAudioSource = factory.createAudioSource(MediaConstraints())
             localAudioTrack = factory.createAudioTrack("ARDAMSa0", localAudioSource)
@@ -203,6 +217,14 @@ class WebRTCManager(
             localAudioSource?.dispose()
             localAudioSource = null
             
+            // Restore AudioManager state
+            audioManager?.let { am ->
+                am.mode = previousAudioMode
+                am.isSpeakerphoneOn = previousSpeakerphoneOn
+                listener.onWebRTCLog("WebRTC: AudioManager state restored.")
+            }
+            audioManager = null
+
             listener.onWebRTCLog("WebRTC: Call ended. Connection and local stream closed.")
         } catch (e: Exception) {
             Log.e("WebRTCManager", "Error closing WebRTC connection", e)
