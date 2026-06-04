@@ -158,6 +158,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         // Setup WebRTCManager
         webRTCManager = WebRTCManager(
             context = getApplication(),
+            serverUrl = _serverUrl.value,
             listener = object : WebRTCManager.Listener {
                 override fun onWebRTCLog(message: String) {
                     addLog(message)

@@ -168,7 +168,10 @@ class CallManager {
       
       const resp = await fetch('/api/livekit/token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + (localStorage.getItem('token') || '')
+        },
         body: JSON.stringify({ roomName, participantName, isCounselor: true })
       });
       
