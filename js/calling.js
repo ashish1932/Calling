@@ -168,6 +168,11 @@ class CallManager {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
         ],
         iceCandidatePoolSize: 10,
       };
@@ -189,17 +194,18 @@ class CallManager {
 
       // When remote audio track arrives, attach to audio element
       this.peerConnection.ontrack = (event) => {
-        console.log('[WebRTC] Remote audio track received.');
-      this.remoteAudio.srcObject = event.streams[0];
-      if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
-        this.remoteAudio.play().catch(e => {
-          console.warn('[WebRTC] Audio autoplay blocked:', e);
-          this.addWarningToTranscriptLog(
-            "Audio Blocked", 
-            "Browser blocked autoplay. Click anywhere on the screen to enable audio."
-          );
-        });
-      }
+        console.log('[WebRTC] Remote audio track received.', event);
+        const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+        this.remoteAudio.srcObject = stream;
+        if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
+          this.remoteAudio.play().catch(e => {
+            console.warn('[WebRTC] Audio autoplay blocked:', e);
+            this.addWarningToTranscriptLog(
+              "Audio Blocked", 
+              "Browser blocked autoplay. Click anywhere on the screen to enable audio."
+            );
+          });
+        }
       };
 
       // ICE candidates: buffer if patient hasn't answered yet

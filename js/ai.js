@@ -12,7 +12,11 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
-    const headers = { "Content-Type": "application/json" };
+    const headers = { 
+      "Content-Type": "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+      "ngrok-skip-browser-warning": "1"
+    };
 
     if (provider === 'gemini') {
       if (window.CounselFlow.CONFIG.GEMINI_API_KEY) {
@@ -329,7 +333,10 @@ The JSON object must have EXACTLY these fields:
       formData.append("temperature", "0");
       formData.append("prompt", "Counselor and patient are speaking about addiction recovery.");
 
-      const headers = {};
+      const headers = {
+        "X-Requested-With": "XMLHttpRequest",
+        "ngrok-skip-browser-warning": "1"
+      };
       if (window.CounselFlow.CONFIG.GROQ_API_KEY) {
         headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GROQ_API_KEY}`;
       }

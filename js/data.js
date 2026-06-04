@@ -946,14 +946,30 @@ window.CounselFlow.clearStorageWarning = () => { storageWarningToToast = null; }
 // Centralized Explicit Port Configuration (Issue #16)
 window.CounselFlow.API_BASE = (() => {
   const origin = window.location.origin;
-  // If running on local dev static server (port 3001), use port 5001 for backend API
-  if (origin.includes(':3001')) {
+  if (origin.includes('localhost:3001')) {
     return 'http://localhost:5001/api';
   }
-  // Otherwise, use the origin of the current page (e.g. if loaded via port 5001 or ngrok)
   return `${origin}/api`;
 })();
+
 const API_BASE = window.CounselFlow.API_BASE;
+
+// Inject ngrok bypass header into all fetch requests targeting our API
+const originalFetch = window.fetch;
+window.fetch = async function(resource, config) {
+  if (typeof resource === 'string' && resource.includes(API_BASE)) {
+    config = config || {};
+    config.headers = config.headers || {};
+    if (config.headers instanceof Headers) {
+      config.headers.append('ngrok-skip-browser-warning', '1');
+      config.headers.append('X-Requested-With', 'XMLHttpRequest');
+    } else {
+      config.headers['ngrok-skip-browser-warning'] = '1';
+      config.headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+  }
+  return originalFetch(resource, config);
+};
 
 async function getStoredPatients() {
   //  Version-aware reseed check 
@@ -978,7 +994,7 @@ async function getStoredPatients() {
       try {
         await fetch(`${API_BASE}/seed`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
           body: JSON.stringify({ patients: INITIAL_PATIENTS })
         });
         console.info('[DataSeed] MongoDB reseeded successfully.');
@@ -1021,7 +1037,7 @@ async function savePatients(patients) {
     try {
       await fetch(`${API_BASE}/patients`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify(patients)
       });
     } catch (err) {
@@ -1063,7 +1079,7 @@ async function saveCallLogs(logs) {
     try {
       await fetch(`${API_BASE}/call-logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify(logs)
       });
     } catch (err) {
@@ -1092,7 +1108,7 @@ window.CounselFlow.deleteCallLogs = async function(logIds) {
     try {
       await fetch(`${API_BASE}/call-logs`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify({ logIds })
       });
     } catch (err) {
@@ -1362,7 +1378,7 @@ async function saveAuditTrail(events) {
     try {
       await fetch(`${API_BASE}/audit-trail`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify(events)
       });
     } catch (err) {

@@ -47,7 +47,7 @@ app.use(express.json({ limit: '50mb' }));
 // Rate limiting setup
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 10000, // Limit each IP to 10000 requests per windowMs to prevent testing blockages
   message: { error: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', apiLimiter);
@@ -85,7 +85,7 @@ app.get('/api/ice-servers', (req, res) => {
     { urls: 'stun:stun.cloudflare.com:3478' },
   ];
 
-  // Custom TURN from .env (production override)
+  // Custom TURN from .env (production override), else fallback to free OpenRelay
   if (process.env.TURN_URL && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
     iceServers.push({
       urls: process.env.TURN_URL,
@@ -94,7 +94,12 @@ app.get('/api/ice-servers', (req, res) => {
     });
     console.log('[ICE] Using custom TURN server from .env');
   } else {
-    console.warn('[ICE] No secure TURN server configured in .env. Falling back to STUN-only.');
+    iceServers.push({
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject',
+    });
+    console.log('[ICE] No custom TURN configured, using default openrelay.metered.ca');
   }
 
   res.json({ iceServers, iceCandidatePoolSize: 10 });
