@@ -65,6 +65,7 @@ class WebRTCManager(
                     val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                     val request = Request.Builder()
                         .url("$serverUrl/api/livekit/token")
+                        .addHeader("X-Requested-With", "XMLHttpRequest")
                         .post(body)
                         .build()
                     

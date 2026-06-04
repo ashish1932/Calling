@@ -170,7 +170,8 @@ class CallManager {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + (localStorage.getItem('token') || '')
+          'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+          'X-Requested-With': 'XMLHttpRequest'
         },
         body: JSON.stringify({ roomName, participantName, isCounselor: true })
       });
@@ -219,6 +220,7 @@ class CallManager {
       console.error("LiveKit Setup failed:", error);
       this.endCall();
       window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up LiveKit audio.", "error");
+      throw error;
     }
   }
 
@@ -717,7 +719,11 @@ class CallManager {
     this.patientAnswered = false;
 
     // Initiate LiveKit Call (Replaces WebRTC)
-    await this.initLiveKit(patient);
+    try {
+      await this.initLiveKit(patient);
+    } catch (e) {
+      return; // initLiveKit already called endCall() and showed a toast
+    }
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
     this.isRecording = !!patient.consentCaptured;
