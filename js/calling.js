@@ -152,110 +152,70 @@ class CallManager {
     }
   }
 
-  // Init WebRTC Offer for In-App Calling
-  async initWebRTC(patient) {
-    if (!this.socket) {
-      window.CounselFlow.app.showToast('Not Connected', 'Socket not connected to signaling server. Refresh the page.', 'error');
+  // Init LiveKit for In-App Calling (Replaces WebRTC P2P)
+  async initLiveKit(patient) {
+    if (!window.LivekitClient) {
+      window.CounselFlow.app.showToast('Error', 'LiveKit SDK not loaded', 'error');
       return;
     }
-    
+
     try {
       this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      console.log('[WebRTC] Microphone access granted.');
+      console.log('[LiveKit] Microphone access granted.');
 
-      // Fetch ICE servers (STUN + TURN) from backend — TURN relays audio across different networks
-      let iceConfig = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-          }
-        ],
-        iceCandidatePoolSize: 10,
-      };
-      try {
-        const apiBase = '/api';
-        const resp = await fetch(`${apiBase}/ice-servers`);
-        if (resp.ok) {
-          const data = await resp.json();
-          iceConfig = { iceServers: data.iceServers, iceCandidatePoolSize: data.iceCandidatePoolSize || 10 };
-          console.log('[WebRTC] Loaded ICE config from server:', iceConfig.iceServers.length, 'servers');
-        }
-      } catch (iceErr) {
-        console.warn('[WebRTC] Could not load ICE config from server, using STUN fallback:', iceErr.message);
-      }
-
-      this.peerConnection = new RTCPeerConnection(iceConfig);
-
-      this.localStream.getTracks().forEach(track => this.peerConnection.addTrack(track, this.localStream));
-
-      // When remote audio track arrives, attach to audio element
-      this.peerConnection.ontrack = (event) => {
-        console.log('[WebRTC] Remote audio track received.', event);
-        const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-        this.remoteAudio.srcObject = stream;
-        if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
-          this.remoteAudio.play().catch(e => {
-            console.warn('[WebRTC] Audio autoplay blocked:', e);
-            this.addWarningToTranscriptLog(
-              "Audio Blocked", 
-              "Browser blocked autoplay. Click anywhere on the screen to enable audio."
-            );
-          });
-        }
-      };
-
-      // ICE candidates: buffer if patient hasn't answered yet
-      this.peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          if (this.patientAnswered) {
-            const targetId = this.patientSocketId || patient.id;
-            this.socket.emit('ice-candidate', {
-              to: targetId,
-              candidate: event.candidate
-            });
-          } else {
-            this.iceCandidateQueue.push(event.candidate);
-          }
-        }
-      };
-
-      // Log connection state changes for debugging
-      this.peerConnection.onconnectionstatechange = () => {
-        console.log('[WebRTC] Connection state:', this.peerConnection.connectionState);
-        if (this.peerConnection.connectionState === 'connected') {
-          window.CounselFlow.app.showToast('Audio Connected', 'WebRTC peer-to-peer audio link established.', 'success');
-        } else if (this.peerConnection.connectionState === 'failed' || this.peerConnection.connectionState === 'disconnected') {
-          console.warn('[WebRTC] P2P failed — switching to Socket audio relay mode');
-          window.CounselFlow.app.showToast('Switching to Relay', 'Network relay mode activated — audio will continue via server.', 'info');
-          this.startSocketAudioRelay();
-        }
-      };
-
-      this.peerConnection.oniceconnectionstatechange = () => {
-        console.log('[WebRTC] ICE state:', this.peerConnection.iceConnectionState);
-      };
-
-      const offer = await this.peerConnection.createOffer();
-      await this.peerConnection.setLocalDescription(offer);
-
-      this.socket.emit('call-user', {
-        to: patient.id,
-        offer: offer,
-        callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+      const roomName = `counselflow-room-${patient.id}`;
+      const participantName = `counselor-${Math.random().toString(36).substr(2, 5)}`;
+      
+      const resp = await fetch('/api/livekit/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName, participantName, isCounselor: true })
       });
+      
+      const data = await resp.json();
+      if (!data.token) throw new Error(data.error || "Could not get LiveKit token");
+      
+      this.room = new LivekitClient.Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
+
+      this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === LivekitClient.Track.Kind.Audio || track.kind === 'audio') {
+          console.log('[LiveKit] Remote audio track subscribed');
+          const element = track.attach();
+          document.body.appendChild(element);
+          if (typeof element.play === 'function') {
+            element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
+          }
+        }
+      });
+
+      this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        track.detach();
+      });
+
+      // Use the LiveKit URL from the .env, which the backend should expose. Since frontend doesn't have it, we hardcode it for now based on your keys.
+      await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', data.token);
+      console.log('[LiveKit] Connected to room');
+      
+      // Publish local mic track
+      const localAudioTrack = this.localStream.getAudioTracks()[0];
+      await this.room.localParticipant.publishTrack(localAudioTrack);
+
+      // Notify patient via socket (since FCM is skipped for now)
+      this.socket.emit('call-user', {
+         to: patient.id,
+         offer: { type: 'livekit', roomName: roomName },
+         callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+      });
+      
       window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via Patient Portal...`, "info");
+      
     } catch (error) {
-      console.error("WebRTC Setup failed:", error);
-      this.endCall(); // Clean up broken UI state
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        window.CounselFlow.app.showToast("Microphone Blocked", "Please allow microphone access in your browser settings, then try again.", "error");
-      } else {
-        window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up WebRTC audio.", "error");
-      }
+      console.error("LiveKit Setup failed:", error);
+      this.endCall();
+      window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up LiveKit audio.", "error");
     }
   }
 
@@ -753,8 +713,8 @@ class CallManager {
     this.iceCandidateQueue = [];
     this.patientAnswered = false;
 
-    // Initiate WebRTC Call
-    await this.initWebRTC(patient);
+    // Initiate LiveKit Call (Replaces WebRTC)
+    await this.initLiveKit(patient);
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
     this.isRecording = !!patient.consentCaptured;
@@ -860,9 +820,9 @@ class CallManager {
       }
     }
     this.patientSocketId = null;
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
+    if (this.room) {
+      this.room.disconnect();
+      this.room = null;
     }
     if (this.localStream) {
       this.localStream.getTracks().forEach(t => t.stop());

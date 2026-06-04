@@ -12,6 +12,27 @@ const { Server } = require('socket.io');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 const { Patient, CallLog, AuditTrail, Counselor } = require('./models');
+const { AccessToken } = require('livekit-server-sdk');
+const admin = require('firebase-admin');
+const fs = require('fs');
+
+// Initialize Firebase Admin conditionally
+const firebaseCredsPath = process.env.FIREBASE_CREDENTIALS_PATH || path.join(__dirname, '../google-services.json');
+let fcmInitialized = false;
+if (fs.existsSync(firebaseCredsPath)) {
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(firebaseCredsPath, 'utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    fcmInitialized = true;
+    console.log('✅ Firebase Admin initialized for Push Notifications');
+  } catch (err) {
+    console.error('❌ Failed to initialize Firebase Admin:', err.message);
+  }
+} else {
+  console.warn('⚠️ Firebase credentials not found. FCM push notifications will be disabled.');
+}
 
 // JWT authentication middleware placeholder
 // TODO: Replace with real JWT verification when auth is implemented
@@ -684,6 +705,70 @@ io.on('connection', (socket) => {
 });
 
 
+
+// ==========================================
+// LIVEKIT & FCM (NEW SFU & PUSH ARCHITECTURE)
+// ==========================================
+
+// Endpoint to generate a LiveKit token for a room
+app.post('/api/livekit/token', authenticateJWT, (req, res) => {
+  const { roomName, participantName, isCounselor } = req.body;
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    return res.status(500).json({ error: 'LiveKit API keys not configured in .env' });
+  }
+
+  if (!roomName || !participantName) {
+    return res.status(400).json({ error: 'roomName and participantName are required' });
+  }
+
+  try {
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity: participantName,
+    });
+    at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+
+    res.json({ token: at.toJwt() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to trigger a push notification to a patient device
+app.post('/api/livekit/notify-call', authenticateJWT, async (req, res) => {
+  const { fcmToken, roomName, callerName } = req.body;
+
+  if (!fcmInitialized) {
+    return res.status(500).json({ error: 'Firebase Admin not initialized. Check credentials.' });
+  }
+
+  if (!fcmToken) {
+    return res.status(400).json({ error: 'fcmToken is required' });
+  }
+
+  try {
+    const message = {
+      notification: {
+        title: 'Incoming Call',
+        body: `${callerName || 'Your Counselor'} is calling you.`
+      },
+      data: {
+        type: 'incoming_call',
+        roomName: roomName || 'default_room'
+      },
+      token: fcmToken
+    };
+
+    const response = await admin.messaging().send(message);
+    res.json({ success: true, messageId: response });
+  } catch (err) {
+    console.error('Error sending push notification:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ==========================================
 // START SERVER

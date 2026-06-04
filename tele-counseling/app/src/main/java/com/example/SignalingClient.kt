@@ -58,7 +58,7 @@ class SignalingClient(
                         val data = args[0] as JSONObject
                         val from = data.getString("socket")
                         val offerObj = data.getJSONObject("offer")
-                        val offerSdp = offerObj.getString("sdp")
+                        val offerSdp = offerObj.optString("roomName", offerObj.optString("sdp", ""))
                         
                         val callerInfo = data.optJSONObject("callerInfo")
                         val callerName = callerInfo?.optString("name") ?: "Counselor"
