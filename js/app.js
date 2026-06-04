@@ -211,7 +211,6 @@ class AppController {
         this.isNotesDirty = false;
       }
       this.switchScreen(screenId);
-      if (screenId === 'profiles') this.renderProfilesList();
     };
     navItems.forEach(item => {
       item.addEventListener('click', () => handleNavigation(item));
