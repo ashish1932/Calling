@@ -1,0 +1,6 @@
+{
+  "name": "Tele Counseling",
+  "description": "Patient-facing tele-counseling WebRTC audio call client with real-time connection to counselors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

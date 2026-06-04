@@ -588,6 +588,21 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 2b. Web Dashboard initiates handoff to Counselor Mobile App
+  socket.on('handoff-call', (data) => {
+    const targetSocket = counselorSockets[data.to];
+    if (targetSocket) {
+      console.log(`📱 Web Dashboard handing off call to Counselor Mobile ${data.to}`);
+      io.to(targetSocket).emit('handoff-call', {
+        socket: socket.id,
+        roomName: data.roomName,
+        patientName: data.patientName
+      });
+    } else {
+      console.log(`⚠️ Counselor Mobile ${data.to} is not online for handoff.`);
+    }
+  });
+
   // 3. Patient answers the call (sends WebRTC Answer)
   socket.on('make-answer', (data) => {
     // data = { to: 'counselorSocketId', answer: RTCSessionDescriptionInit }

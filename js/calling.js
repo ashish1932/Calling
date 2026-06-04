@@ -152,7 +152,7 @@ class CallManager {
     }
   }
 
-  // Init LiveKit for In-App Calling (Replaces WebRTC P2P)
+  // Init LiveKit for In-App Calling (App-to-App Architecture)
   async initLiveKit(patient) {
     if (!window.LivekitClient) {
       window.CounselFlow.app.showToast('Error', 'LiveKit SDK not loaded', 'error');
@@ -160,11 +160,9 @@ class CallManager {
     }
 
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      console.log('[LiveKit] Microphone access granted.');
-
+      // The web dashboard no longer publishes its mic. It acts as an observer for ASR.
       const roomName = `counselflow-room-${patient.id}`;
-      const participantName = `counselor-${Math.random().toString(36).substr(2, 5)}`;
+      const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
       
       const resp = await fetch('/api/livekit/token', {
         method: 'POST',
@@ -173,7 +171,7 @@ class CallManager {
           'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
           'X-Requested-With': 'XMLHttpRequest'
         },
-        body: JSON.stringify({ roomName, participantName, isCounselor: true })
+        body: JSON.stringify({ roomName, participantName, isCounselor: true }) // Still considered a counselor for JWT role
       });
       
       const data = await resp.json();
@@ -186,11 +184,21 @@ class CallManager {
 
       this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
         if (track.kind === LivekitClient.Track.Kind.Audio || track.kind === 'audio') {
-          console.log('[LiveKit] Remote audio track subscribed');
+          console.log('[LiveKit] Remote audio track subscribed from:', participant.name || participant.identity);
           const element = track.attach();
           document.body.appendChild(element);
           if (typeof element.play === 'function') {
             element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
+          }
+          
+          // Wire up Live Transcription!
+          const stream = new MediaStream([track.mediaStreamTrack]);
+          const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+          
+          if (speakerName === "Counselor") {
+            this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
+          } else {
+            this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
           }
         }
       });
@@ -199,19 +207,23 @@ class CallManager {
         track.detach();
       });
 
-      // Use the LiveKit URL from the .env, which the backend should expose. Since frontend doesn't have it, we hardcode it for now based on your keys.
+      // Connect to LiveKit Room
       await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', data.token);
-      console.log('[LiveKit] Connected to room');
-      
-      // Publish local mic track
-      const localAudioTrack = this.localStream.getAudioTracks()[0];
-      await this.room.localParticipant.publishTrack(localAudioTrack);
+      console.log('[LiveKit] Connected to room as Dashboard Observer');
 
-      // Notify patient via socket (since FCM is skipped for now)
+      // 1. Notify patient mobile app to join room
       this.socket.emit('call-user', {
          to: patient.id,
          offer: { type: 'livekit', roomName: roomName },
          callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+      });
+      
+      // 2. Notify counselor mobile app to join room (Handoff)
+      const counselorId = patient.counselorId || "CO-101";
+      this.socket.emit('handoff-call', {
+         to: counselorId,
+         roomName: roomName,
+         patientName: patient.name
       });
       
       window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via Patient Portal...`, "info");
@@ -258,124 +270,80 @@ class CallManager {
     });
   }
 
-  // Initialize Live Transcription using Groq Whisper (Replaces flaky Web Speech API)
-  initLiveTranscription() {
-    try {
-      // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers
-      const setupChunkedRecorder = (stream, speaker) => {
-        if (!stream || !window.MediaRecorder) return null;
-        let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: 'audio/webm', audioBitsPerSecond: 16000 };
-          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-             options = {}; // fallback for Safari
-          }
-        }
-        
-        const recorder = new MediaRecorder(stream, options);
-        recorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-            this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
-              const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-              if (transcript && this.isActive) {
-
-                //  Hallucination Guard 
-                const isHallucination = (text) => {
-                  const t = text.trim();
-
-                  // 2. Repetition loop detection (same word ≥3 times in a row)
-                  if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
-
-                  // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
-                  const HALLUCINATIONS = [
-                    "what's going on", "everything is fine", "i'm feeling a bit anxious",
-                    "thank you for watching", "thank you", "thanks for watching",
-                    "please subscribe", "like and subscribe",
-                    "कर दो", "झाल", "अलवूँ", "जरूर जो",
-                    "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
-                    "bye bye", "goodbye", "see you", "okay okay okay",
-                    ".   .", ". . .", "...",
-                  ];
-                  const tLower = t.toLowerCase();
-                  if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
-
-                  return false;
-                };
-
-                if (isHallucination(transcript)) {
-                  console.debug('[ASR] Filtered hallucination:', transcript);
-                  return;
-                }
-                // 
-
-                this.addTranscriptLine(speaker, transcript);
-
-              }
-            }).catch(e => console.error("Whisper transcription error:", e));
-          }
-        };
-
-        recorder.start();
-        
-        // Interval to stop and restart so headers are rewritten for the Whisper API
-        const intervalId = setInterval(() => {
-          if (this.isActive && recorder.state === 'recording') {
-            recorder.stop();
-            recorder.start();
-          } else if (!this.isActive) {
-            clearInterval(intervalId);
-            if (recorder.state === 'recording') recorder.stop();
-          }
-        }, 4000);
-        
-        return recorder;
-      };
-
-      // 1. Setup Counselor Mic Recorder
-      if (this.localStream) {
-        this.counselorRecorder = setupChunkedRecorder(this.localStream, "Counselor");
-        console.log('[ASR] Counselor live transcription started.');
-      } else {
-        console.warn('[ASR] Local stream or MediaRecorder not available for counselor.');
+  // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers for Groq Whisper
+  setupChunkedRecorder(stream, speaker) {
+    if (!stream || !window.MediaRecorder) return null;
+    let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options = { mimeType: 'audio/webm', audioBitsPerSecond: 16000 };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+         options = {}; // fallback for Safari
       }
-
-      // 2. Setup Patient Remote Stream Recorder (if peer connection has streams)
-      if (this.peerConnection) {
-        const attachRemoteRecorder = (stream) => {
-          if (!stream || this.patientRecorder) return;
-          this.patientRecorder = setupChunkedRecorder(stream, "Patient");
-          console.log('[ASR] Patient live transcription started.');
-        };
-
-        // Otherwise listen for the track event
-        this.peerConnection.addEventListener('track', (e) => {
-          attachRemoteRecorder(e.streams[0]);
-        });
-        
-        // Ensure we try again when the connection is fully established
-        this.peerConnection.addEventListener('connectionstatechange', () => {
-          if (this.peerConnection.connectionState === 'connected') {
-            let retries = 0;
-            const checkReceivers = () => {
-              const receivers = this.peerConnection.getReceivers();
-              const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
-              if (audioReceiver && audioReceiver.track.readyState === 'live') {
-                const remoteStream = new MediaStream([audioReceiver.track]);
-                attachRemoteRecorder(remoteStream);
-              } else if (retries < 10) {
-                retries++;
-                setTimeout(checkReceivers, 500);
-              }
-            };
-            checkReceivers();
-          }
-        });
-      }
-
-    } catch (e) {
-      console.error("[ASR] Live transcription setup failed:", e);
-      window.CounselFlow.app.showToast("Transcription Error", "Could not start live transcription engine.", "error");
     }
+    
+    const recorder = new MediaRecorder(stream, options);
+    recorder.ondataavailable = async (event) => {
+      if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+        this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+          const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+          if (transcript && this.isActive) {
+
+            //  Hallucination Guard 
+            const isHallucination = (text) => {
+              const t = text.trim();
+
+              // 2. Repetition loop detection (same word ≥3 times in a row)
+              if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
+
+              // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
+              const HALLUCINATIONS = [
+                "what's going on", "everything is fine", "i'm feeling a bit anxious",
+                "thank you for watching", "thank you", "thanks for watching",
+                "please subscribe", "like and subscribe",
+                "कर दो", "झाल", "अलवूँ", "जरूर जो",
+                "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
+                "bye bye", "goodbye", "see you", "okay okay okay",
+                ".   .", ". . .", "...",
+              ];
+              const tLower = t.toLowerCase();
+              if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
+
+              return false;
+            };
+
+            if (isHallucination(transcript)) {
+              console.debug('[ASR] Filtered hallucination:', transcript);
+              return;
+            }
+            // 
+
+            this.addTranscriptLine(speaker, transcript);
+
+          }
+        }).catch(e => console.error("Whisper transcription error:", e));
+      }
+    };
+
+    recorder.start();
+    
+    // Interval to stop and restart so headers are rewritten for the Whisper API
+    const intervalId = setInterval(() => {
+      if (this.isActive && recorder.state === 'recording') {
+        recorder.stop();
+        recorder.start();
+      } else if (!this.isActive) {
+        clearInterval(intervalId);
+        if (recorder.state === 'recording') recorder.stop();
+      }
+    }, 4000);
+    
+    return recorder;
+  }
+
+  // Live Transcription is now triggered directly by LiveKit track subscriptions
+  initLiveTranscription() {
+     // No-op for now. ASR is initialized dynamically when LiveKit tracks arrive in TrackSubscribed event.
+     console.log('[ASR] Transcription engine armed and waiting for LiveKit audio tracks...');
   }
 
   // ── Socket Audio Relay — activated automatically when WebRTC P2P fails
