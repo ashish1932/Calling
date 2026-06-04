@@ -52,10 +52,21 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
+// Add ngrok bypass header to all responses so ngrok doesn't intercept
+app.use((req, res, next) => {
+  res.setHeader('ngrok-skip-browser-warning', '1');
+  next();
+});
+
 // CSRF Protection Middleware
 // Require a custom header 'X-Requested-With' for state-changing endpoints
+// Exempt /api/ai/* routes — they authenticate via API key and break with CSRF + ngrok free tier
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    // Skip CSRF for AI proxy endpoints (they use API key auth)
+    if (req.path.startsWith('/api/ai/')) {
+      return next();
+    }
     if (req.headers['x-requested-with'] !== 'XMLHttpRequest') {
       return res.status(403).json({ error: 'CSRF token missing or invalid (missing X-Requested-With header)' });
     }
