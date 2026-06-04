@@ -30,7 +30,7 @@ jobs:
 
     - name: Build debug APK (Patient App)
       working-directory: ./tele-counseling
-      run: ./gradlew assembleDebug
+      run: ./gradlew clean assembleDebug --no-daemon --no-build-cache --stacktrace
 
     - name: Upload Patient APK as Artifact
       uses: actions/upload-artifact@v4
@@ -49,7 +49,7 @@ jobs:
 
     - name: Build debug APK (Counselor App)
       working-directory: ./counselor-app
-      run: ./gradlew assembleDebug
+      run: ./gradlew clean assembleDebug --no-daemon --no-build-cache --stacktrace
 
     - name: Upload Counselor APK as Artifact
       uses: actions/upload-artifact@v4

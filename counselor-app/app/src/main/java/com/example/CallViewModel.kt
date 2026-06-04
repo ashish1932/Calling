@@ -71,8 +71,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         _serverUrl.value = url
     }
 
-    fun updatePatientId(id: String) {
-        _patientId.value = id
+    fun updateCounselorId(id: String) {
+        _counselorId.value = id
     }
 
     fun clearLogs() {
