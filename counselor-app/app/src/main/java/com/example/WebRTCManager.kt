@@ -5,7 +5,7 @@ import android.media.AudioManager
 import android.util.Log
 import io.livekit.android.LiveKit
 import io.livekit.android.room.Room
-import io.livekit.android.room.RoomListener
+
 import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.Track
 import kotlinx.coroutines.CoroutineScope
@@ -86,16 +86,14 @@ class WebRTCManager(
                     withContext(Dispatchers.Main) {
                         listener.onWebRTCLog("LiveKit: Token received, connecting to LiveKit cloud...")
                         room = LiveKit.create(context)
-                        room?.addListener(object : RoomListener {
-                            override fun onTrackSubscribed(
-                                track: io.livekit.android.room.track.Track,
-                                publication: io.livekit.android.room.track.RemoteTrackPublication,
-                                participant: io.livekit.android.room.participant.RemoteParticipant
-                            ) {
-                                listener.onWebRTCLog("LiveKit: Remote track subscribed!")
-                                listener.onTrackAdded()
+                        CoroutineScope(Dispatchers.Main).launch {
+                            room?.events?.events?.collect { event ->
+                                if (event is io.livekit.android.events.RoomEvent.TrackSubscribed) {
+                                    listener.onWebRTCLog("LiveKit: Remote track subscribed!")
+                                    listener.onTrackAdded()
+                                }
                             }
-                        })
+                        }
                         
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
