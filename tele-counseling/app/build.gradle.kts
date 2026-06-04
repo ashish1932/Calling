@@ -96,7 +96,6 @@ dependencies {
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.socket.io.client)
-  implementation(libs.stream.webrtc.android)
   implementation("io.livekit:livekit-android:2.4.1")
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
