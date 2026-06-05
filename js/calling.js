@@ -167,7 +167,7 @@ class CallManager {
                 if (tokenData.token && window.LivekitClient) {
                     this.isActive = true;
                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
-                    window.CounselFlow.appController.switchScreen('call-console');
+                    window.CounselFlow.app.switchScreen('call-console');
                     this.startTimer();
                     
                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
@@ -364,7 +364,7 @@ class CallManager {
               console.debug('[ASR] Filtered hallucination:', transcript);
               return;
             }
-            //              this.addTranscriptLine(speaker, t, null, isHallucination(t));
+            this.addTranscriptLine(speaker, transcript);
             }
           });
         }
@@ -405,7 +405,7 @@ class CallManager {
       phone: "+91-0000000000",
       addictionCategory: "Opioid (Heroin)"
     };
-    window.CounselFlow.appController.switchScreen('call-console');
+    window.CounselFlow.app.switchScreen('call-console');
     this.startCall(demoPatient);
   }
 
