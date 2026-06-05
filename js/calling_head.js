@@ -121,7 +121,16 @@ class CallManager {
     }
     
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,           // Mono — optimal for speech recognition
+          echoCancellation: true,    // Remove echo from speakers
+          noiseSuppression: true,    // Suppress ambient background noise
+          autoGainControl: true,     // Normalize volume levels
+          sampleRate: 16000          // 16kHz — Whisper's native sample rate
+        },
+        video: false
+      });
       console.log('[WebRTC] Microphone access granted.');
 
       // Fetch ICE servers (STUN + TURN) from backend ΓÇö TURN relays audio across different networks
@@ -239,59 +248,84 @@ class CallManager {
       // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers
       const setupChunkedRecorder = (stream, speaker) => {
         if (!stream || !window.MediaRecorder) return null;
-        const options = { mimeType: 'audio/webm' };
+        const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 48000 };
         const recorder = new MediaRecorder(stream, options);
         
         recorder.ondataavailable = async (event) => {
           if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-            const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-            if (transcript && this.isActive) {
+            console.debug(`[ASR Debug] ${speaker} chunk: ${event.data.size} bytes, MIME: ${recorder.mimeType}`);
+            // Serialize Whisper API calls to prevent out-of-order flooding
+            this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+              const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+              if (transcript && this.isActive) {
+                console.debug(`[ASR Debug] ${speaker} raw transcript: "${transcript}"`);
 
-              //  Hallucination Guard 
-              const isHallucination = (text) => {
-                const t = text.trim();
-                // 1. Too short (less than 3 words)
-                if (t.split(/\s+/).length < 3) return true;
+                //  Hallucination Guard 
+                const isHallucination = (text) => {
+                  const t = text.trim();
+                  // 1. Too short — single words or fragments are almost always noise
+                  if (t.split(/\s+/).length < 2) return true;
 
-                // 2. Repetition loop detection (same word ΓëÑ3 times in a row)
-                if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
+                  // 2. Pure punctuation / ellipsis
+                  if (/^[\s.,…!?\-_]+$/.test(t)) return true;
 
-                // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
-                const HALLUCINATIONS = [
-                  "what's going on", "everything is fine", "i'm feeling a bit anxious",
-                  "thank you for watching", "thank you", "thanks for watching",
-                  "please subscribe", "like and subscribe",
-                  "αñòαñ░ αñªαÑï", "αñ¥αñ╛αñ▓", "αñàαñ▓αñ╡αÑéαñü", "αñ£αñ░αÑéαñ░ αñ£αÑï",
-                  "α¿╕α⌐üα¿úα⌐ï", "α¿╣α¿╛α¿é α¿£α⌐Ç", "α¿£α⌐Ç α¿╣α¿╛α¿é",
-                  "bye bye", "goodbye", "see you", "okay okay okay",
-                  ".   .", ". . .", "...",
-                ];
-                const tLower = t.toLowerCase();
-                if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
+                  // 3. Repetition loop detection (same word ≥3 times in a row)
+                  if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
 
-                return false;
-              };
+                  // 4. Comprehensive Whisper hallucination blocklist
+                  const HALLUCINATIONS = [
+                    // English YouTube / podcast artifacts / silence loops
+                    "do not", "don't", "do not track", "pata", "pata nahi", "pata ne",
+                    "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
+                    "hello i'm a 12 year old", "i'm a 12 year old",
+                    "what's going on", "everything is fine", "i'm feeling a bit anxious",
+                    "thank you for watching", "thank you", "thanks for watching",
+                    "please subscribe", "like and subscribe", "comment below",
+                    "please like", "don't forget to subscribe",
+                    "bye bye", "goodbye", "see you", "okay okay okay",
+                    "you", "so", "the", "and", "is", "it",
+                    // Punjabi short-word hallucinations (Gurmukhi)
+                    "ਹਾ", "ਜੀਹ", "ਠੀਕ", "ਓਹ", "ਅਰੇ",
+                    "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
+                    // Hindi short-word hallucinations (Devanagari)
+                    "हूँ", "हैं", "अरे", "ओह",
+                    "कर दो", "झाल", "अलवूँ", "जरूर जो",
+                    // Romanized Hindi/Punjabi hallucinations
+                    "namaste", "namaste ji", "kya haal", "haan ji", "ji haan",
+                    "theek hai", "achha", "hmm", "haan",
+                    // Punctuation artifacts
+                    ".   .", ". . .", "...", "!!", "??",
+                  ];
+                  const tLower = t.toLowerCase();
+                  if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
 
-              if (isHallucination(transcript)) {
-                console.debug('[ASR] Filtered hallucination:', transcript);
-                return;
-              }
-              // 
+                  // 5. Detect if entire text is just filler sounds
+                  if (/^(um|uh|hmm|hm|ah|oh|eh|huh|mm|mhm|erm|uhm|uhh|hmm+|haan|ha+n?)[\s.,!?]*$/i.test(tLower)) return true;
 
-              this.addTranscriptLine(speaker, transcript);
+                  return false;
+                };
 
-              // Interactive AI Patient Demo: Auto-reply using LLaMA (only for meaningful speech)
-              if (this.isInteractiveDemo && speaker === "Counselor" && transcript.split(/\s+/).length >= 5) {
-                const reply = await window.CounselFlow.aiOrchestrator.generatePatientResponseAsync(
-                  this.getTranscript(),
-                  this.activePatient,
-                  this.activeLanguage
-                );
-                if (reply && this.isActive) {
-                  this.addTranscriptLine("Patient", reply);
+                if (isHallucination(transcript)) {
+                  console.debug('[ASR] Filtered hallucination:', transcript);
+                  return;
+                }
+                // 
+
+                this.addTranscriptLine(speaker, transcript);
+
+                // Interactive AI Patient Demo: Auto-reply using LLaMA (only for meaningful speech)
+                if (this.isInteractiveDemo && speaker === "Counselor" && transcript.split(/\s+/).length >= 5) {
+                  const reply = await window.CounselFlow.aiOrchestrator.generatePatientResponseAsync(
+                    this.getTranscript(),
+                    this.activePatient,
+                    this.activeLanguage
+                  );
+                  if (reply && this.isActive) {
+                    this.addTranscriptLine("Patient", reply);
+                  }
                 }
               }
-            }
+            }).catch(e => console.error("Whisper transcription error:", e));
           }
         };
 
@@ -306,7 +340,7 @@ class CallManager {
             clearInterval(intervalId);
             if (recorder.state === 'recording') recorder.stop();
           }
-        }, 4000);
+        }, 6000);
         
         return recorder;
       };
@@ -527,7 +561,11 @@ class CallManager {
     if (!isDemoMode) this.activeScenarioKey = null;
 
     // Initiate WebRTC Call
-    await this.initWebRTC(patient);
+    if (!isDemoMode) {
+      await this.initWebRTC(patient);
+    } else {
+      this.patientAnswered = true;
+    }
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
     this.isRecording = !!patient.consentCaptured;

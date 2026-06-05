@@ -1,16 +1,25 @@
 {
   "expo": {
-    "name": "patient-mobile-app",
+    "name": "CounselFlow Patient",
     "slug": "patient-mobile-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#090d16"
+    },
     "ios": {
       "supportsTablet": true,
       "bitcode": false
     },
     "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#090d16"
+      },
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_NETWORK_STATE",
@@ -33,13 +42,19 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera",
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone"
         }
+      ],
+      [
+        "./plugins/withAndroidMinSdk",
+        {
+          "minSdkVersion": 24
+        }
       ]
     ],
+    "owner": "casqwer",
     "extra": {
       "eas": {
-        "projectId": "ea078dfb-5ed9-4f87-a343-e97ea972aac2"
+        "projectId": "5db2d888-e165-4f2a-a0b8-38f60301a13f"
       }
-    },
-    "owner": "aryasingh014"
+    }
   }
 }

@@ -1,16 +1,23 @@
 {
   "cli": {
-    "version": ">= 12.5.0"
+    "version": ">= 12.5.0",
+    "appVersionSource": "remote"
   },
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_ANDROID_MIN_SDK_VERSION": "24"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_ANDROID_MIN_SDK_VERSION": "24"
       }
     },
     "production": {}

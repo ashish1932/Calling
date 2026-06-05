@@ -17,6 +17,9 @@ services:
       start_period: 30s
 
   backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
     image: casdevops/punjab-voice-backend:latest
     container_name: punjab-voiceai_backend
     restart: unless-stopped
@@ -32,6 +35,9 @@ services:
       - MONGODB_URI=mongodb://mongodb:27017/punjabvoice
 
   frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: casdevops/punjab-voice-frontend:latest
     container_name: punjab-voiceai_frontend
     restart: unless-stopped

@@ -2,6 +2,35 @@
 
 window.CounselFlow = window.CounselFlow || {};
 
+// Global secure fetch wrapper to inject JWT, CSRF (X-Requested-With), and Ngrok headers automatically
+(() => {
+  const originalFetch = window.fetch;
+  window.fetch = async function (url, options = {}) {
+    options.headers = options.headers || {};
+    
+    // Add CSRF validation header for state-changing methods
+    const method = (options.method || 'GET').toUpperCase();
+    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+      if (!options.headers['X-Requested-With'] && !options.headers['x-requested-with']) {
+        options.headers['X-Requested-With'] = 'XMLHttpRequest';
+      }
+    }
+    
+    // Add Ngrok bypass header
+    if (!options.headers['ngrok-skip-browser-warning']) {
+      options.headers['ngrok-skip-browser-warning'] = '1';
+    }
+    
+    // Add JWT authorization header
+    const token = window.localStorage.getItem('counseling_logged_in_token');
+    if (token && !options.headers['Authorization'] && !options.headers['authorization']) {
+      options.headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return originalFetch(url, options);
+  };
+})();
+
 // Centralized Configuration and Environment variables (Architecture #44, Code Quality #7)
 window.CounselFlow.CONFIG = {
   SCHEMA_VERSION: 14,
@@ -40,20 +69,8 @@ window.CounselFlow.CONFIG = {
     HINDI: 'hi-IN',
     ENGLISH: 'en-US'
   },
-  GROQ_API_KEY: (() => {
-    try {
-      return window.localStorage.getItem("counseling_groq_api_key") || "";
-    } catch (e) {
-      return "";
-    }
-  })(),
-  GEMINI_API_KEY: (() => {
-    try {
-      return window.localStorage.getItem("counseling_gemini_api_key") || "";
-    } catch (e) {
-      return "";
-    }
-  })(),
+  GROQ_API_KEY: "",
+  GEMINI_API_KEY: "",
   AI_PROVIDER: (() => {
     try {
       return window.localStorage.getItem("counseling_ai_provider") || "groq";
@@ -977,10 +994,10 @@ async function getStoredPatients() {
   // a reseed so new INITIAL_PATIENTS always appear after a data update.
   const storedVersion = safeGetItem('counseling_schema_version');
   const currentVersion = window.CounselFlow.CONFIG.SCHEMA_VERSION.toString();
-  const needsReseed = !storedVersion;
+  let needsReseed = !storedVersion;
   if (storedVersion && storedVersion !== currentVersion) {
     console.warn(`[DataSeed] Schema version mismatch (${storedVersion} → ${currentVersion}). Migrating gracefully...`);
-    safeSetItem('counseling_schema_version', currentVersion);
+    needsReseed = true;
   }
 
   if (needsReseed) {
@@ -1008,7 +1025,16 @@ async function getStoredPatients() {
 
   if (!navigator.onLine) {
     const rawData = safeGetItem("counseling_patients");
-    return rawData ? await deobfuscateData(rawData) : INITIAL_PATIENTS;
+    if (rawData) {
+      try {
+        return await deobfuscateData(rawData);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption failed, resetting store:", decryptErr);
+        safeSetItem('counseling_schema_version', '');
+        return INITIAL_PATIENTS;
+      }
+    }
+    return INITIAL_PATIENTS;
   }
   
   try {
@@ -1024,7 +1050,16 @@ async function getStoredPatients() {
   } catch (err) {
     console.error("Backend fetch failed, falling back to local storage:", err);
     const rawData = safeGetItem("counseling_patients");
-    return rawData ? await deobfuscateData(rawData) : INITIAL_PATIENTS;
+    if (rawData) {
+      try {
+        return await deobfuscateData(rawData);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption failed, resetting store:", decryptErr);
+        safeSetItem('counseling_schema_version', '');
+        return INITIAL_PATIENTS;
+      }
+    }
+    return INITIAL_PATIENTS;
   }
 }
 
@@ -1052,7 +1087,15 @@ async function getStoredCallLogs() {
 
   if (!navigator.onLine) {
     const rawLogs = safeGetItem("counseling_call_logs");
-    return rawLogs ? await deobfuscateData(rawLogs) : defaultLogs;
+    if (rawLogs) {
+      try {
+        return await deobfuscateData(rawLogs);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption of call logs failed:", decryptErr);
+        return defaultLogs;
+      }
+    }
+    return defaultLogs;
   }
   
   try {
@@ -1068,7 +1111,15 @@ async function getStoredCallLogs() {
   } catch (err) {
     console.error("Backend fetch failed, falling back to local storage:", err);
     const rawLogs = safeGetItem("counseling_call_logs");
-    return rawLogs ? await deobfuscateData(rawLogs) : defaultLogs;
+    if (rawLogs) {
+      try {
+        return await deobfuscateData(rawLogs);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption of call logs failed:", decryptErr);
+        return defaultLogs;
+      }
+    }
+    return defaultLogs;
   }
 }
 

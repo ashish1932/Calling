@@ -35,7 +35,7 @@ const PatientSchema = new mongoose.Schema({
     resolvedBy: String,
     resolvedAt: String
   }
-}, { timestamps: true, strict: false });
+}, { timestamps: true, strict: true });
 
 const CallLogSchema = new mongoose.Schema({
   logId: { type: String, required: true, unique: true },
@@ -70,7 +70,7 @@ const CounselorSchema = new mongoose.Schema({
   phone: String,
   specialization: String,
   avatar: String
-}, { timestamps: true, strict: false });
+}, { timestamps: true, strict: true });
 
 module.exports = {
   Patient: mongoose.model('Patient', PatientSchema),

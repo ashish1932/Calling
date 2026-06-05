@@ -28,7 +28,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs: SharedPreferences = application.getSharedPreferences("AppPreferences", Context.MODE_PRIVATE)
 
     private val _serverUrl = MutableStateFlow(
-        prefs.getString("serverUrl", "https://economist-slideshow-flannels.ngrok-free.dev") ?: "https://economist-slideshow-flannels.ngrok-free.dev"
+        prefs.getString("serverUrl", "https://altitude-quintuple-compile.ngrok-free.dev") ?: "https://altitude-quintuple-compile.ngrok-free.dev"
     )
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 

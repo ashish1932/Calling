@@ -2050,3 +2050,13 @@ header {
   border-color: var(--accent-blue);
 }
 
+/* Hide call initiation interface elements to enforce mobile-only call control */
+#btn-quick-call,
+#btn-call-start,
+#btn-detail-start-session,
+.btn-queue-call-trigger,
+.btn-call-trigger {
+  display: none !important;
+}
+
+

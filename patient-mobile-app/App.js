@@ -163,49 +163,47 @@ export default function App() {
   const isHallucination = (text) => {
     if (!text) return true;
     const t = text.trim();
-    if (t.length < 2) return true;
+
+    // Block if text is purely punctuation or spaces
+    if (/^[\s.,…!?\-_।]+$/.test(t)) return true;
 
     // --- SCRIPT FILTER ---
     // Allow: Latin (English), Devanagari (Hindi), Gurmukhi (Punjabi)
     // Block: Thai, Arabic/Urdu, Cyrillic, CJK, Japanese, Korean
-    // NOTE: \u0600-\u06FF is Arabic/Urdu range — valid Punjabi is Gurmukhi (\u0A00-\u0A7F)
     const disallowedScriptRegex = /[\u0E00-\u0E7F\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\u31F0-\u31FF]/;
     if (disallowedScriptRegex.test(t)) return true;
-
-    // Block if text is ONLY numbers/punctuation with no speech content
-    if (/^[\d\s.,!?।-]+$/.test(t)) return true;
 
     // Block repeated word patterns (e.g. "ha ha ha ha")
     if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
 
     // Block extremely short single characters that aren't real words
-    if (t.length < 3 && /^[a-z]+$/i.test(t)) return true;
-
-    // --- PHRASE HALLUCINATIONS (YouTube/ambient noise artefacts) ---
-    // Only block EXACT known Whisper hallucination phrases, NOT common short words
-    const HALLUCINATION_PHRASES = [
-      "thank you for watching", "thanks for watching",
-      "please subscribe", "like and subscribe", "subscribe to my channel",
-      "bye bye", "see you next time", "see you in the next video",
-      // Specific nonsense phrases seen in testing
-      "लेकिन मेरे में क्यों नहीं होना चाहिए",
-      "तुक बोले गया तब ना बोल तो रहा है",
-      "तो डेस्पोर्ट चेक करना",
-      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब",
-    ];
-
-    // Silence / breath sounds that Whisper often emits
-    const SILENCE_TOKENS = new Set([
-      "um", "uh", "ah", "hmm", "mm", "hm",
-    ]);
+    if (t.length < 2 && /^[a-z]+$/i.test(t)) return true;
 
     const cleanT = t.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
 
-    // Block EXACT silence tokens (single word)
-    if (SILENCE_TOKENS.has(cleanT)) return true;
+    // Short phrases/words that should only be blocked if they are the EXACT transcript
+    const EXACT_HALLUCINATIONS = new Set([
+      "do not", "don't", "do not track", "pata", "pata ne",
+      "thank you", "bye bye", "goodbye", "see you", "okay okay okay",
+      "you", "so", "the", "and", "is", "it",
+      "um", "uh", "ah", "hmm", "mm", "hm"
+    ]);
 
-    // Block known hallucination phrases
-    if (HALLUCINATION_PHRASES.some(h => cleanT.includes(h))) return true;
+    // Long unique phrases that can be blocked if they appear anywhere
+    const SUBSTRING_HALLUCINATIONS = [
+      "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
+      "hello i'm a 12 year old", "i'm a 12 year old",
+      "thank you for watching", "thanks for watching", "please subscribe",
+      "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
+      "see you in the next video", "see you next time",
+      "लेकिन मेरे में क्यों नहीं होना चाहिए",
+      "तुक बोले गया तब ना बोल तो रहा है",
+      "तो डेस्पोर्ट चेक करना",
+      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
+    ];
+
+    if (EXACT_HALLUCINATIONS.has(cleanT)) return true;
+    if (SUBSTRING_HALLUCINATIONS.some(h => cleanT.includes(h.toLowerCase()))) return true;
 
     return false;
   };
@@ -348,8 +346,8 @@ export default function App() {
         };
 
         const processAudioChunk = async (uri, loopId, maxDb) => {
-          // Skip silent chunks to save API costs & requests (threshold: -45 dB)
-          if (maxDb > -160 && maxDb < -45) {
+          // Skip silent chunks to save API costs & requests (threshold: -55 dB)
+          if (maxDb > -160 && maxDb < -55) {
             console.log(`[Mobile ASR] Skipping silent chunk (max volume: ${maxDb} dB)`);
             return;
           }
@@ -740,6 +738,9 @@ export default function App() {
         setShowReconnect(true);
       },
       onTranscriptUpdate: (data) => {
+        // Skip transcripts of our own voice relayed back from the counselor dashboard
+        // to avoid duplicate entries (counselor dashboard may also transcribe our stream)
+        if (data.sender === userRole) return;
         setTranscripts(prev => [...prev, data]);
       },
       onCallQualityUpdate: (status) => {

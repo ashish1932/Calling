@@ -16,6 +16,7 @@ class CallManager {
     this.animationFrame = null;
     this.counselorRecorder = null;
     this.patientRecorder = null;
+    this.patientIsTranscribing = false;
     this.activePatient = null;
     this.activeLanguage = 'pa-IN';
     
@@ -83,8 +84,9 @@ class CallManager {
 
       this.socket.on('connect', () => {
         console.log('[WebRTC] Connected to Signaling Server:', this.socket.id);
-        const counselorId = 'counselor-' + Math.random().toString(36).substr(2, 9);
-        this.socket.emit('register', { role: 'counselor', id: counselorId });
+        // BUG FIX #4: Use stable counselor ID — a random ID on every reconnect breaks signal routing
+        // because the patient's stored counselorSocket ID would no longer match after a network blip
+        this.socket.emit('register', { role: 'counselor', id: 'counselor-1' });
       });
 
       this.socket.on('answer-made', async (data) => {
@@ -147,6 +149,102 @@ class CallManager {
         this.patientSocketId = null;
         this.endCall();
       });
+
+      // Counselor Web Dashboard Sync Listeners
+      this.socket.on('counselor-call-started', (data) => {
+        console.log('[WebRTC Sync] Mobile counselor call started with patient:', data.patientId);
+        const pt = window.CounselFlow.app.patients.find(p => p.id === data.patientId);
+        if (pt) {
+          window.CounselFlow.app.selectedPatient = pt;
+          window.CounselFlow.app.switchScreen('call-console');
+          
+          this.activePatient = pt;
+          this.patientSocketId = data.callerSocketId;
+          this.isActive = true;
+          this.duration = 0;
+          
+          const languageCode = pt.preferredLanguage || 'pa-IN';
+          const langSelect = document.getElementById('call-language-select');
+          if (langSelect) langSelect.value = languageCode;
+          
+          this.activeLanguage = languageCode;
+          
+          document.getElementById('call-status-dot').className = 'status-dot active';
+          document.getElementById('call-status-label').innerText = 'Calling...';
+          document.getElementById('call-recipient-name').innerText = escapeHtml(pt.name);
+          document.getElementById('call-recipient-details').innerText = `${escapeHtml(pt.id)} | ${escapeHtml(pt.addictionCategory)}`;
+          document.getElementById('call-recipient-avatar').innerText = pt.name.split(' ').map(n => n[0]).join('');
+          document.getElementById('call-recipient-avatar').classList.add('active-call');
+          
+          document.getElementById('btn-call-start').style.display = 'none';
+          document.getElementById('btn-call-end').style.display = 'flex';
+          
+          document.getElementById('call-transcript-log').innerHTML = '';
+          document.getElementById('call-duration-timer').innerText = '0:00:00';
+          
+          document.getElementById('call-post-summary-section').style.display = 'none';
+          document.getElementById('call-transcript-log').style.display = 'flex';
+          
+          const postCallPanel = document.getElementById('post-call-actions-panel');
+          if (postCallPanel) postCallPanel.style.display = 'none';
+        }
+      });
+
+      this.socket.on('counselor-call-connected', (data) => {
+        console.log('[WebRTC Sync] Mobile counselor call connected.');
+        if (this.isActive) {
+          document.getElementById('call-status-dot').className = 'status-dot connected';
+          document.getElementById('call-status-label').innerText = 'In Consultation (Passive Monitor)';
+          
+          if (this.timerInterval) clearInterval(this.timerInterval);
+          this.timerInterval = setInterval(() => {
+            this.duration++;
+            const hrs = Math.floor(this.duration / 3600).toString();
+            const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+            const secs = (this.duration % 60).toString().padStart(2, '0');
+            document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
+          }, 1000);
+        }
+      });
+
+      this.socket.on('counselor-transcript-update', (data) => {
+        console.log('[WebRTC Sync] Received live transcript chunk from mobile:', data);
+        if (this.isActive) {
+          // If we start receiving actual live transcripts from the mobile app, stop the scenario script
+          if (this.scenarioInterval) {
+            clearTimeout(this.scenarioInterval);
+            this.scenarioInterval = null;
+          }
+          this.addTranscriptLine(data.sender === 'counselor' ? 'Counselor' : 'Patient', data.text, false);
+        }
+      });
+
+      this.socket.on('transcript-update', (data) => {
+        console.log('[WebRTC] Received live transcript from peer:', data);
+        if (this.isActive) {
+          // If we receive a patient transcript from the socket, it means the patient mobile app
+          // is transcribing their own voice. We should disable our local remote patient recorder
+          // to avoid double transcription.
+          if (data.sender === 'patient') {
+            this.patientIsTranscribing = true;
+            if (this.patientRecorder) {
+              console.log('[ASR] Patient is transcribing locally. Stopping remote patient recorder to avoid duplicates.');
+              try {
+                this.patientRecorder.stop();
+              } catch (e) {}
+              this.patientRecorder = null;
+            }
+          }
+          this.addTranscriptLine(data.sender === 'counselor' ? 'Counselor' : 'Patient', data.text, false);
+        }
+      });
+
+      this.socket.on('counselor-call-ended', () => {
+        console.log('[WebRTC Sync] Mobile counselor call ended.');
+        if (this.isActive) {
+          this.endCall();
+        }
+      });
     } else {
       console.warn("Socket.io is not loaded.");
     }
@@ -160,7 +258,16 @@ class CallManager {
     }
     
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,           // Mono — optimal for speech recognition
+          echoCancellation: true,    // Remove echo from speakers
+          noiseSuppression: true,    // Suppress ambient background noise
+          autoGainControl: true,     // Normalize volume levels
+          sampleRate: 16000          // 16kHz — Whisper's native sample rate
+        },
+        video: false
+      });
       console.log('[WebRTC] Microphone access granted.');
 
       // Fetch ICE servers (STUN + TURN) from backend — TURN relays audio across different networks
@@ -299,9 +406,9 @@ class CallManager {
       // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers
       const setupChunkedRecorder = (stream, speaker) => {
         if (!stream || !window.MediaRecorder) return null;
-        let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
+        let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 48000 };
         if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: 'audio/webm', audioBitsPerSecond: 16000 };
+          options = { mimeType: 'audio/webm', audioBitsPerSecond: 48000 };
           if (!MediaRecorder.isTypeSupported(options.mimeType)) {
              options = {}; // fallback for Safari
           }
@@ -310,29 +417,54 @@ class CallManager {
         const recorder = new MediaRecorder(stream, options);
         recorder.ondataavailable = async (event) => {
           if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+            console.debug(`[ASR Debug] ${speaker} chunk: ${event.data.size} bytes, MIME: ${recorder.mimeType}`);
             this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
               const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
               if (transcript && this.isActive) {
+                console.debug(`[ASR Debug] ${speaker} raw transcript: "${transcript}"`);
 
                 //  Hallucination Guard 
                 const isHallucination = (text) => {
                   const t = text.trim();
 
+                  // 1. Pure punctuation / ellipsis
+                  if (/^[\s.,…!?\-_।]+$/.test(t)) return true;
+
                   // 2. Repetition loop detection (same word ≥3 times in a row)
                   if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
 
-                  // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
-                  const HALLUCINATIONS = [
-                    "what's going on", "everything is fine", "i'm feeling a bit anxious",
-                    "thank you for watching", "thank you", "thanks for watching",
-                    "please subscribe", "like and subscribe",
-                    "कर दो", "झाल", "अलवूँ", "जरूर जो",
-                    "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
-                    "bye bye", "goodbye", "see you", "okay okay okay",
-                    ".   .", ". . .", "...",
+                  // 3. Block extremely short single characters that aren't real words (e.g. single consonants like "b", "x")
+                  if (t.length < 2 && /^[a-z]+$/i.test(t)) return true;
+
+                  const cleanT = t.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
+
+                  // Short phrases/words that should only be blocked if they are the EXACT transcript
+                  const EXACT_HALLUCINATIONS = [
+                    "do not", "don't", "do not track", "pata", "pata ne",
+                    "thank you", "bye bye", "goodbye", "see you", "okay okay okay",
+                    "you", "so", "the", "and", "is", "it",
+                    "ਹਾ", "ਜੀਹ", "ਓਹ", "ਅਰੇ", "ਸੁਣੋ", // meaningless fillers
+                    "हूँ", "हैं", "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"
                   ];
-                  const tLower = t.toLowerCase();
-                  if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
+
+                  // Long unique phrases that can be blocked if they appear anywhere
+                  const SUBSTRING_HALLUCINATIONS = [
+                    "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
+                    "hello i'm a 12 year old", "i'm a 12 year old",
+                    "thank you for watching", "thanks for watching", "please subscribe",
+                    "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
+                    "see you in the next video", "see you next time",
+                    "लेकिन मेरे में क्यों नहीं होना चाहिए",
+                    "तुक बोले गया तब ना बोल तो रहा है",
+                    "तो डेस्पोर्ट चेक करना",
+                    "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
+                  ];
+
+                  if (EXACT_HALLUCINATIONS.includes(cleanT)) return true;
+                  if (SUBSTRING_HALLUCINATIONS.some(h => cleanT.includes(h.toLowerCase()))) return true;
+
+                  // 4. Detect if entire text is just filler sounds
+                  if (/^(um|uh|hmm|hm|ah|oh|eh|huh|mm|mhm|erm|uhm|uhh|hmm+)[\s.,!?]*$/i.test(cleanT)) return true;
 
                   return false;
                 };
@@ -361,7 +493,7 @@ class CallManager {
             clearInterval(intervalId);
             if (recorder.state === 'recording') recorder.stop();
           }
-        }, 4000);
+        }, 6000);
         
         return recorder;
       };
@@ -737,7 +869,7 @@ class CallManager {
 
 
   // Begin Tele-Counseling session call
-  async startCall(patient, languageCode, direction = "Outbound") {
+  async startCall(patient, languageCode, direction = "Outbound", isDemoMode = false) {
     if (this.isActive) return;
     
     this.isActive = true;
@@ -752,9 +884,14 @@ class CallManager {
     this.asrRetryCount = 0; // Reset ASR network retry count (Error Handling #4)
     this.iceCandidateQueue = [];
     this.patientAnswered = false;
+    this.patientIsTranscribing = false;
 
     // Initiate WebRTC Call
-    await this.initWebRTC(patient);
+    if (!isDemoMode) {
+      await this.initWebRTC(patient);
+    } else {
+      this.patientAnswered = true;
+    }
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
     this.isRecording = !!patient.consentCaptured;
@@ -820,7 +957,9 @@ class CallManager {
     }, 1000);
 
     // Initialize Live Transcription when call connects (using Groq Whisper chunking)
-    if (!this.isRecording) {
+    if (isDemoMode) {
+      console.log('[ASR] Demo mode active. Suppressing live transcription setup.');
+    } else if (!this.isRecording) {
       this.addWarningToTranscriptLog(
         "Recording Consent Denied", 
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
@@ -868,6 +1007,7 @@ class CallManager {
       this.localStream.getTracks().forEach(t => t.stop());
       this.localStream = null;
     }
+    this.patientIsTranscribing = false;
 
      // Stop Whisper Transcribers
      if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
@@ -1025,13 +1165,13 @@ class CallManager {
   }
 
   // Populate line on current visual transcript feed with batched/requestAnimationFrame frames
-  addTranscriptLine(speaker, text) {
+  addTranscriptLine(speaker, text, isLocal = true) {
     if (!text || !text.trim()) return;
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.#currentTranscript.push({ speaker, text, timestamp: time });
     // Relay to patient portal for live transcript feature
-    if (this.socket && this.patientSocketId) {
+    if (isLocal && this.socket && this.patientSocketId) {
       this.socket.emit('transcript-update', {
         to: this.patientSocketId,
         text: text,
@@ -1078,7 +1218,7 @@ class CallManager {
   async playScenarioScript(langKey, targetPatient = null) {
     // Bug #3: Clear old scenario intervals before triggering a new one
     if (this.scenarioInterval) {
-      clearInterval(this.scenarioInterval);
+      clearTimeout(this.scenarioInterval);
     }
     
     const scenario = CALL_SCENARIOS[langKey];
@@ -1113,6 +1253,45 @@ class CallManager {
     };
 
     // Trigger the dynamic recursive timeout sequence
+    this.scenarioInterval = setTimeout(playNextTurn, 1000);
+  }
+
+  // Load and play a dialogue scenario for passive web monitoring of a mobile-initiated call
+  async playScenarioScriptWithoutCallInit(langKey, targetPatient = null) {
+    if (this.scenarioInterval) {
+      clearTimeout(this.scenarioInterval);
+    }
+    
+    const scenario = CALL_SCENARIOS[langKey];
+    if (!scenario) return;
+
+    const patientObj = targetPatient || window.CounselFlow.app.patients.find(p => p.id === scenario.patientId);
+    if (!patientObj) return;
+
+    this.activeScenarioKey = langKey;
+    
+    // Set up canvas waveform
+    this.lastFrameTime = performance.now();
+    this.drawWaveform();
+    
+    const scriptLines = scenario.transcript;
+    this.scenarioIndex = 0;
+
+    const playNextTurn = () => {
+      if (this.isActive) {
+        if (this.scenarioIndex < scriptLines.length) {
+          const line = scriptLines[this.scenarioIndex];
+          this.addTranscriptLine(line.speaker, line.text);
+          this.scenarioIndex++;
+          
+          const nextDelay = Math.max(1500, line.text.length * 60);
+          this.scenarioInterval = setTimeout(playNextTurn, nextDelay);
+        } else {
+          // Stay connected until ended by counselor mobile app
+        }
+      }
+    };
+
     this.scenarioInterval = setTimeout(playNextTurn, 1000);
   }
 

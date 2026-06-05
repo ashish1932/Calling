@@ -283,6 +283,9 @@ document.addEventListener('DOMContentLoaded', () => {
      if (currentTab === 'patients') renderPatientsProfileUI();
      else renderCounselorsProfileUI();
   }
+  
+  window.CounselFlow = window.CounselFlow || {};
+  window.CounselFlow.renderProfilesList = renderUI;
 
   async function renderPatientsProfileUI() {
     // Gap 1: Decouple from dead API, use local app state

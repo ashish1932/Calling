@@ -35,6 +35,23 @@ function resolveStaticPath(requestPath) {
   return requestPath;
 }
 
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  try {
+    const parsedUrl = new URL(origin);
+    const hostname = parsedUrl.hostname;
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.endsWith('.ngrok-free.dev') ||
+      hostname.endsWith('.ngrok.io') ||
+      hostname.endsWith('.tunnelmole.net')
+    );
+  } catch (e) {
+    return false;
+  }
+};
+
 //  Reverse Proxy helper (HTTP requests) 
 function proxyHttpRequest(req, res) {
   const options = {
@@ -45,13 +62,17 @@ function proxyHttpRequest(req, res) {
     headers : { ...req.headers, host: `${BACKEND_HOST}:${BACKEND_PORT}` },
   };
 
+  const origin = req.headers.origin;
+  const allowOrigin = isOriginAllowed(origin) ? (origin || '*') : 'null';
+
   const proxy = http.request(options, (proxyRes) => {
     // Forward CORS headers so browser doesn't block
     const headers = {
       ...proxyRes.headers,
-      'Access-Control-Allow-Origin' : '*',
+      'Access-Control-Allow-Origin' : allowOrigin,
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      'Access-Control-Allow-Credentials': 'true',
     };
     res.writeHead(proxyRes.statusCode, headers);
     proxyRes.pipe(res, { end: true });
@@ -68,12 +89,16 @@ function proxyHttpRequest(req, res) {
 
 //  Static file server 
 const server = http.createServer((req, res) => {
+  const origin = req.headers.origin;
+  const allowOrigin = isOriginAllowed(origin) ? (origin || '*') : 'null';
+
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
-      'Access-Control-Allow-Origin' : '*',
+      'Access-Control-Allow-Origin' : allowOrigin,
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      'Access-Control-Allow-Credentials': 'true',
     });
     res.end();
     return;
@@ -104,6 +129,15 @@ const server = http.createServer((req, res) => {
       res.end(`File not found: ${filePath}`);
       return;
     }
+    
+    // Inject secure Content-Security-Policy and OWASP security headers
+    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: https: ws: http:; img-src 'self' data: https: blob:; media-src 'self' data: https: blob:;";
+    res.setHeader('Content-Security-Policy', csp);
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+
     res.writeHead(200, { 'Content-Type': contentType });
     res.end(data);
   });

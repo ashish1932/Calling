@@ -20,11 +20,16 @@ class AppController {
     this.inactivityTimeout = null;
     this.inactivityLimit = window.CounselFlow.CONFIG.INACTIVITY_LIMIT_MS; 
     this.dom = {};
+    this.onlinePatientIds = [];
     this.initRoleGate = this.initRoleGate.bind(this);
     this.renderSettingsTab = this.renderSettingsTab.bind(this);
     this.renderCallConsole = this.renderCallConsole.bind(this);
   }
   async init() {
+    try {
+      window.localStorage.removeItem('counseling_groq_api_key');
+      window.localStorage.removeItem('counseling_gemini_api_key');
+    } catch (e) {}
     this.cacheDOMElements();
     this.patients = await window.CounselFlow.getStoredPatients();
     this.patients.forEach(pt => {
@@ -55,6 +60,7 @@ class AppController {
       this.renderDashboard();
       this.renderPatientsList();
       this.updateNotificationBadge();
+      this.startOnlinePolling();
     });
     const canvas = document.getElementById('call-waveform-canvas');
     if (canvas) {
@@ -77,6 +83,33 @@ class AppController {
       }, 800);
     }
     this.initRoleGate();
+  }
+  startOnlinePolling() {
+    const fetchOnline = async () => {
+      try {
+        const response = await fetch(`${window.CounselFlow.API_BASE}/patients/online`, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true'
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const oldOnline = this.onlinePatientIds || [];
+          this.onlinePatientIds = data.onlinePatientIds || [];
+          const changed = oldOnline.length !== this.onlinePatientIds.length || 
+                          oldOnline.some(id => !this.onlinePatientIds.includes(id));
+          if (changed) {
+            if (this.activeScreen === 'dashboard') {
+              this.renderPatientsList();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching online patients:', err);
+      }
+    };
+    fetchOnline();
+    setInterval(fetchOnline, 5000);
   }
   bindEventDelegation() {
     const handlePatientRowClick = (e) => {
@@ -211,7 +244,6 @@ class AppController {
         this.isNotesDirty = false;
       }
       this.switchScreen(screenId);
-      if (screenId === 'profiles') this.renderProfilesList();
     };
     navItems.forEach(item => {
       item.addEventListener('click', () => handleNavigation(item));
@@ -416,6 +448,11 @@ class AppController {
         this.dom.pageTitleText.innerText = "Clinical Stage Pipeline";
         this.dom.pageSubtitleText.innerText = "Manage patient clinical checkpoints and stage transitions inline";
         this.renderClinicalWorkflow();
+        break;
+      case 'profiles':
+        this.dom.pageTitleText.innerText = "Profiles Management";
+        this.dom.pageSubtitleText.innerText = "Manage patient and counselor rosters and assignments";
+        this.renderProfilesList();
         break;
     }
   }
@@ -862,6 +899,13 @@ class AppController {
     this.renderMissedCallsPanel();
     this.renderTimelineList();
     this.renderEscalationPanel();
+  }
+  renderProfilesList() {
+    if (window.CounselFlow && typeof window.CounselFlow.renderProfilesList === 'function') {
+      window.CounselFlow.renderProfilesList();
+    } else {
+      console.warn("Profiles rendering function not registered yet.");
+    }
   }
   renderClinicalWorkflow() {
     const board = document.getElementById('clinical-workflow-board');
@@ -1589,6 +1633,7 @@ class AppController {
     if (escapedStatus.toLowerCase() === 'lama') statusMarker = '';
     const isLama = escapedStatus.toLowerCase() === 'lama';
     const rowBorderStyle = isLama ? 'border-left: 3px solid var(--accent-red); background: rgba(220,38,38,0.04);' : '';
+    const isOnline = this.onlinePatientIds && this.onlinePatientIds.includes(escapedId);
     return `
       <div class="patient-row" style="justify-content: flex-start; ${rowBorderStyle}" role="row" data-patient-id="${escapedId}" tabindex="0" aria-label="Patient ${escapedName}, ID ${escapedId}">
         ${!isOverview ? `
@@ -1597,8 +1642,9 @@ class AppController {
         </div>
         ` : ''}
         <div class="patient-meta" role="cell" style="flex: 1;">
-          <div class="patient-avatar" style="background: ${pt.avatarColor || 'var(--accent-blue)'};">
+          <div class="patient-avatar" style="background: ${pt.avatarColor || 'var(--accent-blue)'}; position: relative;">
             ${escapedName.split(' ').map(n => n[0]).join('')}
+            ${isOnline ? `<span style="position: absolute; bottom: -2px; right: -2px; width: 10px; height: 10px; background-color: var(--accent-green); border: 2px solid var(--bg-card); border-radius: 50%; box-shadow: 0 0 6px var(--accent-green);"></span>` : ''}
           </div>
           <div class="patient-details">
             <h4 style="font-size: ${isOverview ? '14px' : '15px'}">${escapedName}</h4>
@@ -3206,11 +3252,6 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     });
     this.dom.settingsTabPanel.addEventListener('click', (e) => {
       if (e.target.matches('.btn-primary') && e.target.textContent.includes('Save')) {
-        const groqInput = document.getElementById('settings-text-groq-key');
-        if (groqInput) {
-          window.CounselFlow.CONFIG.GROQ_API_KEY = groqInput.value;
-          window.localStorage.setItem('counseling_groq_api_key', groqInput.value);
-        }
         
         const cRetention = document.getElementById('setting-counselor-retention');
         const aRetention = document.getElementById('setting-admin-retention');
@@ -3246,10 +3287,6 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
             <option value="llama-counsel">Llama-3-Counselor-8B (Fine-tuned for clinical addiction terms)</option>
             <option value="gpt-4o">OpenAI GPT-4o API Node</option>
           </select>
-        </div>
-        <div class="form-group">
-          <label for="settings-text-groq-key">Groq API Key</label>
-          <input type="password" id="settings-text-groq-key" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-input); color: var(--text-primary);" value="${escapeHtml(window.CounselFlow.CONFIG.GROQ_API_KEY || '')}" placeholder="Enter your Groq API Key">
         </div>
         <div class="form-group">
           <span style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:8px; font-weight:600;">System Diagnostic Status</span>
@@ -3453,6 +3490,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
       window.CounselFlow.safeSetItem('counseling_active_role', '');
       window.CounselFlow.safeSetItem('counseling_logged_in_name', '');
       window.CounselFlow.safeSetItem('counseling_logged_in_staff', '');
+      window.localStorage.removeItem('counseling_logged_in_token');
       window.location.reload();
     });
   }
@@ -3804,23 +3842,57 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     const handleLogin = () => {
       const username = userInput ? userInput.value : '';
       const password = passInput ? passInput.value : '';
-      const result = window.CounselFlow.validateDemoLogin(username, password);
-      if (result) {
+      
+      // Attempt server authentication first
+      fetch(`${window.CounselFlow.API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
+      })
+      .then(async res => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Invalid username or password');
+        }
+        return res.json();
+      })
+      .then(data => {
         overlay.style.transition = 'opacity 0.4s';
         overlay.style.opacity = '0';
         setTimeout(() => {
           overlay.remove();
-          window.CounselFlow.safeSetItem('counseling_logged_in_name', result.name);
-          window.CounselFlow.safeSetItem('counseling_logged_in_staff', result.staffId);
-          this.applyRole(result.roleKey, true, result.name);
+          window.localStorage.setItem('counseling_logged_in_token', data.token);
+          window.CounselFlow.safeSetItem('counseling_logged_in_name', data.user.name);
+          window.CounselFlow.safeSetItem('counseling_logged_in_staff', data.user.staffId);
+          this.applyRole(data.user.roleKey, true, data.user.name);
         }, 400);
-      } else {
-        if (errMsg) errMsg.style.display = 'block';
-        if (submitBtn) {
-          submitBtn.style.animation = 'shake 0.4s';
-          setTimeout(() => { submitBtn.style.animation = ''; }, 500);
+      })
+      .catch(err => {
+        console.warn('[AUTH] Server login failed, checking fallback offline mode:', err.message);
+        // Fallback to offline mock validation if credentials match demo database
+        const result = window.CounselFlow.validateDemoLogin(username, password);
+        if (result) {
+          overlay.style.transition = 'opacity 0.4s';
+          overlay.style.opacity = '0';
+          setTimeout(() => {
+            overlay.remove();
+            window.CounselFlow.safeSetItem('counseling_logged_in_name', result.name);
+            window.CounselFlow.safeSetItem('counseling_logged_in_staff', result.staffId);
+            this.applyRole(result.roleKey, true, result.name);
+          }, 400);
+        } else {
+          if (errMsg) {
+            errMsg.innerText = err.message || 'Invalid username or password. Please try again.';
+            errMsg.style.display = 'block';
+          }
+          if (submitBtn) {
+            submitBtn.style.animation = 'shake 0.4s';
+            setTimeout(() => { submitBtn.style.animation = ''; }, 500);
+          }
         }
-      }
+      });
     };
     if (submitBtn) submitBtn.addEventListener('click', handleLogin);
     [userInput, passInput].forEach(inp => {
@@ -3867,6 +3939,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
           window.CounselFlow.safeSetItem('counseling_active_role', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_name', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_staff', '');
+          window.localStorage.removeItem('counseling_logged_in_token');
           window.location.reload();
         }
       });

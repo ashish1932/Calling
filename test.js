@@ -1,6 +1,5 @@
-const puppeteer = require('puppeteer');
-
 (async () => {
+  const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
   page.on('console', msg => console.log('PAGE LOG:', msg.text()));
