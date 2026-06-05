@@ -316,7 +316,7 @@ fun CounselorDashboardView(
     onLogout: () -> Unit
 ) {
     var inputPatientId by remember { mutableStateOf("") }
-    val patients by viewModel.patients.collectAsState(initial = emptyList())
+    val patients by viewModel.patients.collectAsState(initial = emptyList<PatientData>() )
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -416,7 +416,7 @@ fun CounselorDashboardView(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(patient.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         val typeStr = patient.status ?: "Unknown"
-                        Text("ID: ${patient.id} • ${patient.district ?: "Amritsar"} • $typeStr", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                        Text("ID: ${patient.id} • Amritsar • $typeStr", color = Color(0xFF94A3B8), fontSize = 12.sp)
                     }
                     TextButton(
                         onClick = { inputPatientId = patient.id },
