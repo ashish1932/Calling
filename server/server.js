@@ -619,47 +619,86 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     }
 
     const form = new FormData();
-
-    // Rename file to .m4a if needed so Groq accepts it
     const originalName = req.file.originalname || 'chunk.m4a';
     form.append('file', req.file.buffer, originalName);
 
-    // Always use whisper-large-v3 for best multilingual accuracy
-    form.append('model', req.body.model || 'whisper-large-v3');
+    // ── whisper-large-v3-turbo: same multilingual quality, ~2x faster than v3 ──
+    form.append('model', 'whisper-large-v3-turbo');
 
-    // ─── CRITICAL: Do NOT forward 'language' field ───────────────────────────
-    // Pinning a language (e.g. 'en') causes Whisper to TRANSLATE Hindi/Punjabi
-    // into English instead of transcribing the original words. By omitting it,
-    // Whisper auto-detects the language per audio chunk, enabling true
-    // code-switched Hindi + Punjabi + English transcription.
-    // ─────────────────────────────────────────────────────────────────────────
+    // ── Do NOT forward 'language' — auto-detect per chunk for code-switching ──
 
-    // Inject a rich trilingual domain prompt to bias Whisper vocabulary
-    const defaultPrompt =
+    // Rich trilingual domain prompt to guide Whisper vocabulary
+    const domainPrompt =
       'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
-      'The speakers freely mix English, Hindi and Punjabi. ' +
-      'Hindi vocabulary: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति. ' +
-      'Punjabi (Gurmukhi) vocabulary: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ. ' +
+      'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
+      'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
+      'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
       'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
-    form.append('prompt', req.body.prompt || defaultPrompt);
-
-    // Forward temperature if provided
-    if (req.body.temperature !== undefined) {
-      form.append('temperature', req.body.temperature);
-    }
-
-    // response_format: always json
+    form.append('prompt', req.body.prompt || domainPrompt);
+    form.append('temperature', '0');
     form.append('response_format', 'json');
 
-    const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
-      headers: {
-        ...form.getHeaders(),
-        'Authorization': `Bearer ${apiKey}`
-      },
-      timeout: 15000 // 15-second timeout to prevent hanging requests
-    });
+    // ── Step 1: Whisper transcription ─────────────────────────────────────────
+    const whisperResp = await axios.post(
+      'https://api.groq.com/openai/v1/audio/transcriptions',
+      form,
+      {
+        headers: { ...form.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
+        timeout: 15000
+      }
+    );
 
-    res.json(response.data);
+    let rawText = (whisperResp.data?.text || '').trim();
+
+    // ── Step 2: LLM post-processing — fix script errors & hallucinations ──────
+    // Only run if there's actual content to clean
+    if (rawText.length > 2) {
+      try {
+        const llmResp = await axios.post(
+          'https://api.groq.com/openai/v1/chat/completions',
+          {
+            model: 'llama-3.1-8b-instant',
+            temperature: 0,
+            max_tokens: 512,
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'You are a transcript corrector for a telemedicine counseling session in Punjab, India. ' +
+                  'The speech is a natural mix of English, Hindi (Devanagari script), and Punjabi (Gurmukhi script). ' +
+                  'Your ONLY job is to:\n' +
+                  '1. Fix obvious Whisper script errors (e.g. Punjabi words incorrectly written in Devanagari, or vice versa).\n' +
+                  '2. Remove filler noise artefacts like repeated words ("um um um"), garbled text, or YouTube-style phrases ("subscribe", "thank you for watching").\n' +
+                  '3. Return EMPTY STRING "" if the entire input is noise or hallucination.\n' +
+                  'RULES: Do NOT translate. Do NOT add words. Do NOT summarise. Return ONLY the corrected transcript, nothing else.'
+              },
+              {
+                role: 'user',
+                content: `Transcript: "${rawText}"`
+              }
+            ]
+          },
+          {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json'
+            },
+            timeout: 8000
+          }
+        );
+
+        const cleaned = llmResp.data?.choices?.[0]?.message?.content?.trim();
+        if (cleaned !== undefined) {
+          rawText = cleaned;
+        }
+      } catch (llmErr) {
+        // LLM post-processing is best-effort — fall back to raw Whisper text
+        console.warn('[ASR Proxy] LLM post-processing failed, using raw Whisper output:', llmErr.message);
+      }
+    }
+
+    res.json({ text: rawText });
+
   } catch (error) {
     const status = error.response?.status || 500;
     const data = error.response?.data || { error: { message: error.message } };

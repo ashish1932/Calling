@@ -331,19 +331,19 @@ export default function App() {
           isMeteringEnabled: true,
           android: {
             extension: '.m4a',
-            outputFormat: 2, // MPEG_4
-            audioEncoder: 3, // AAC
-            sampleRate: 16000,
-            numberOfChannels: 1,
-            bitRate: 12800,
+            outputFormat: 2,   // MPEG_4
+            audioEncoder: 3,   // AAC
+            sampleRate: 16000, // Whisper's native sample rate
+            numberOfChannels: 1, // Mono - halves file size vs stereo
+            bitRate: 16000,    // 16kbps: good quality for speech at 16kHz mono
           },
           ios: {
             extension: '.m4a',
             outputFormat: 'm4af',
-            audioQuality: 64, // LOW
+            audioQuality: 96,  // Medium quality - better than LOW for accented speech
             sampleRate: 16000,
             numberOfChannels: 1,
-            bitRate: 12800,
+            bitRate: 16000,
           },
         };
 
@@ -361,9 +361,8 @@ export default function App() {
               type: 'audio/m4a',
               name: 'chunk.m4a',
             });
-            formData.append('model', 'whisper-large-v3');
-            formData.append('temperature', '0');
-            formData.append('prompt', 'This is a telemedicine counseling session for addiction recovery in Punjab. The speakers use a mix of English, Hindi (जैसे नशा, दवाई, इलाज, समस्या, मदद), and Punjabi (ਜਿਵੇਂ ਕਿ ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਠੀਕ). Transcribe the spoken words exactly as they are pronounced in their respective scripts (English in Latin, Hindi in Devanagari, Punjabi in Gurmukhi).');
+            // Note: model, language, temperature, prompt are all set server-side
+            // for consistent quality control and anti-hallucination
 
             const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
               method: 'POST',
@@ -434,8 +433,9 @@ export default function App() {
 
             await currentRecording.startAsync();
             
-            // Wait for 3 seconds of recording (decreased from 4 seconds for lower latency)
-            await new Promise(resolve => setTimeout(resolve, 3000));
+            // 5-second chunks: longer context = better Whisper sentence completion
+            // and fewer mid-word cuts at chunk boundaries
+            await new Promise(resolve => setTimeout(resolve, 5000));
             
             if (!recordingIntervalRef.current || transcriptionLoopIdRef.current !== currentLoopId) {
               await currentRecording.stopAndUnloadAsync();
