@@ -194,6 +194,17 @@ class CallManager {
                             }
                         }
                     });
+                    this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                        console.log('[LiveKit] Participant disconnected:', participant.identity);
+                        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                        this.endCall();
+                    });
+                    
+                    this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                        console.log('[LiveKit] Room disconnected.');
+                        this.endCall();
+                    });
+
                     await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
                     window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
                 }
@@ -260,6 +271,17 @@ class CallManager {
 
       this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
         track.detach();
+      });
+
+      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+        console.log('[LiveKit] Participant disconnected:', participant.identity);
+        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+        this.endCall();
+      });
+
+      this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+        console.log('[LiveKit] Room disconnected.');
+        this.endCall();
       });
 
       // Connect to LiveKit Room
