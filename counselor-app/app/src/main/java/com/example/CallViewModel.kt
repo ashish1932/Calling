@@ -103,16 +103,20 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val counselorIdTrimmed = _counselorId.value.trim()
+        _counselorId.value = counselorIdTrimmed
+
         _callState.value = CallState.CONNECTING
-        addLog("Validating login for Counselor ${_counselorId.value}...")
+        addLog("Validating login for Counselor $counselorIdTrimmed...")
 
         val loginData = JSONObject().apply {
-            put("id", _counselorId.value)
+            put("id", counselorIdTrimmed)
             put("role", "counselor")
         }
         val requestBody = loginData.toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url("${_serverUrl.value}/api/login")
+            .header("X-Requested-With", "XMLHttpRequest")
             .post(requestBody)
             .build()
 
@@ -159,6 +163,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         addLog("Fetching assigned patients...")
         val request = Request.Builder()
             .url("${_serverUrl.value}/api/counselors/${_counselorId.value}/patients")
+            .header("X-Requested-With", "XMLHttpRequest")
             .get()
             .build()
 

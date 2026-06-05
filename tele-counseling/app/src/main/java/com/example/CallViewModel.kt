@@ -99,16 +99,20 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        val patientIdTrimmed = _patientId.value.trim()
+        _patientId.value = patientIdTrimmed
+
         _callState.value = CallState.CONNECTING
-        addLog("Validating login for Patient ${_patientId.value}...")
+        addLog("Validating login for Patient $patientIdTrimmed...")
 
         val loginData = JSONObject().apply {
-            put("id", _patientId.value)
+            put("id", patientIdTrimmed)
             put("role", "patient")
         }
         val requestBody = loginData.toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
             .url("${_serverUrl.value}/api/login")
+            .header("X-Requested-With", "XMLHttpRequest")
             .post(requestBody)
             .build()
 
