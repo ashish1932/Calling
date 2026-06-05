@@ -137,7 +137,6 @@ export default function App() {
   const [callSeconds, setCallSeconds] = useState(0);
   const [remoteStream, setRemoteStream] = useState(null);
   const [isRelayMode, setIsRelayMode] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
   const [transcripts, setTranscripts] = useState([]);
   const [callQuality, setCallQuality] = useState('🟢🟢🟢');
   const [showReconnect, setShowReconnect] = useState(false);
@@ -166,31 +165,47 @@ export default function App() {
     const t = text.trim();
     if (t.length < 2) return true;
 
-    // Detect non-supported scripts (Thai, Arabic/Urdu, Cyrillic, Chinese/Japanese/Korean)
+    // --- SCRIPT FILTER ---
+    // Allow: Latin (English), Devanagari (Hindi), Gurmukhi (Punjabi)
+    // Block: Thai, Arabic/Urdu, Cyrillic, CJK, Japanese, Korean
+    // NOTE: \u0600-\u06FF is Arabic/Urdu range — valid Punjabi is Gurmukhi (\u0A00-\u0A7F)
     const disallowedScriptRegex = /[\u0E00-\u0E7F\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\u31F0-\u31FF]/;
-    if (disallowedScriptRegex.test(t)) {
-      return true;
-    }
+    if (disallowedScriptRegex.test(t)) return true;
 
+    // Block if text is ONLY numbers/punctuation with no speech content
+    if (/^[\d\s.,!?।-]+$/.test(t)) return true;
+
+    // Block repeated word patterns (e.g. "ha ha ha ha")
     if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
 
-    const HALLUCINATIONS = [
-      "what's going on", "everything is fine", "i'm feeling a bit anxious",
-      "thank you for watching", "thank you", "thanks for watching",
-      "please subscribe", "like and subscribe",
-      "कर दो", "झाल", "अलवूँ", "जरूर जो",
-      "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
-      "bye bye", "goodbye", "see you", "okay okay okay",
-      "लेकिन मेरे में क्यों नहीं होना चाहिए", "तुक बोले गया तब ना बोल तो रहा है",
-      "तो डेस्पोर्ट चेक करना", "तुक बोले गया तब ना", "बोल तो रहा है",
-      "थैंक यू", "सब्सक्राइब", "लाइक", "चैनल", "वीडियो",
-      "okay", "yeah", "yes", "um", "uh", "ah", "oh"
+    // Block extremely short single characters that aren't real words
+    if (t.length < 3 && /^[a-z]+$/i.test(t)) return true;
+
+    // --- PHRASE HALLUCINATIONS (YouTube/ambient noise artefacts) ---
+    // Only block EXACT known Whisper hallucination phrases, NOT common short words
+    const HALLUCINATION_PHRASES = [
+      "thank you for watching", "thanks for watching",
+      "please subscribe", "like and subscribe", "subscribe to my channel",
+      "bye bye", "see you next time", "see you in the next video",
+      // Specific nonsense phrases seen in testing
+      "लेकिन मेरे में क्यों नहीं होना चाहिए",
+      "तुक बोले गया तब ना बोल तो रहा है",
+      "तो डेस्पोर्ट चेक करना",
+      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब",
     ];
 
-    const cleanT = t.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?।\s]+/g, " ").trim();
-    if (HALLUCINATIONS.some(h => cleanT === h || cleanT.startsWith(h + " ") || cleanT.endsWith(" " + h))) {
-      return true;
-    }
+    // Silence / breath sounds that Whisper often emits
+    const SILENCE_TOKENS = new Set([
+      "um", "uh", "ah", "hmm", "mm", "hm",
+    ]);
+
+    const cleanT = t.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
+
+    // Block EXACT silence tokens (single word)
+    if (SILENCE_TOKENS.has(cleanT)) return true;
+
+    // Block known hallucination phrases
+    if (HALLUCINATION_PHRASES.some(h => cleanT.includes(h))) return true;
 
     return false;
   };
@@ -238,7 +253,7 @@ export default function App() {
               formData.append("file", event.data, "chunk.webm");
               formData.append("model", "whisper-large-v3");
               formData.append("temperature", "0");
-              formData.append("prompt", "Counselor and patient are speaking about addiction recovery.");
+              formData.append("prompt", "This is a telemedicine counseling session for addiction recovery in Punjab. The speakers use a mix of English, Hindi (जैसे नशा, दवाई, इलाज, समस्या, मदद), and Punjabi (ਜਿਵੇਂ ਕਿ ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਠੀਕ). Transcribe the spoken words exactly as they are pronounced in their respective scripts (English in Latin, Hindi in Devanagari, Punjabi in Gurmukhi).");
 
               const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
                 method: "POST",
@@ -348,8 +363,7 @@ export default function App() {
             });
             formData.append('model', 'whisper-large-v3');
             formData.append('temperature', '0');
-            formData.append('language', selectedLanguage);
-            formData.append('prompt', 'Counselor and patient are speaking about addiction recovery.');
+            formData.append('prompt', 'This is a telemedicine counseling session for addiction recovery in Punjab. The speakers use a mix of English, Hindi (जैसे नशा, दवाई, इलाज, समस्या, मदद), and Punjabi (ਜਿਵੇਂ ਕਿ ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਠੀਕ). Transcribe the spoken words exactly as they are pronounced in their respective scripts (English in Latin, Hindi in Devanagari, Punjabi in Gurmukhi).');
 
             const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
               method: 'POST',
@@ -1001,23 +1015,6 @@ export default function App() {
                 />
               </>
             )}
-
-            <Text style={styles.label}>Preferred Language</Text>
-            <View style={styles.langRow}>
-              {[
-                { code: 'en', name: 'English' },
-                { code: 'pa', name: 'ਪੰਜਾਬੀ' },
-                { code: 'hi', name: 'हिन्दी' }
-              ].map(lang => (
-                <TouchableOpacity 
-                  key={lang.code} 
-                  onPress={() => setSelectedLanguage(lang.code)}
-                  style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
-                >
-                  <Text style={styles.langBtnText}>{lang.name}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
 
             <TouchableOpacity style={styles.btnPrimary} onPress={handleLogin}>
               <Text style={styles.btnText}>Login & Open Dashboard</Text>

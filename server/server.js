@@ -619,24 +619,52 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     }
 
     const form = new FormData();
-    form.append('file', req.file.buffer, req.file.originalname || 'chunk.webm');
-    
-    // Append all other fields from the frontend request
-    Object.keys(req.body).forEach(key => {
-      form.append(key, req.body[key]);
-    });
+
+    // Rename file to .m4a if needed so Groq accepts it
+    const originalName = req.file.originalname || 'chunk.m4a';
+    form.append('file', req.file.buffer, originalName);
+
+    // Always use whisper-large-v3 for best multilingual accuracy
+    form.append('model', req.body.model || 'whisper-large-v3');
+
+    // ─── CRITICAL: Do NOT forward 'language' field ───────────────────────────
+    // Pinning a language (e.g. 'en') causes Whisper to TRANSLATE Hindi/Punjabi
+    // into English instead of transcribing the original words. By omitting it,
+    // Whisper auto-detects the language per audio chunk, enabling true
+    // code-switched Hindi + Punjabi + English transcription.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Inject a rich trilingual domain prompt to bias Whisper vocabulary
+    const defaultPrompt =
+      'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
+      'The speakers freely mix English, Hindi and Punjabi. ' +
+      'Hindi vocabulary: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति. ' +
+      'Punjabi (Gurmukhi) vocabulary: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ. ' +
+      'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
+    form.append('prompt', req.body.prompt || defaultPrompt);
+
+    // Forward temperature if provided
+    if (req.body.temperature !== undefined) {
+      form.append('temperature', req.body.temperature);
+    }
+
+    // response_format: always json
+    form.append('response_format', 'json');
 
     const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
       headers: {
         ...form.getHeaders(),
         'Authorization': `Bearer ${apiKey}`
-      }
+      },
+      timeout: 15000 // 15-second timeout to prevent hanging requests
     });
 
     res.json(response.data);
   } catch (error) {
-    console.error("AI Proxy Error (audio):", error.response?.data || error.message);
-    res.status(error.response?.status || 500).json(error.response?.data || { error: { message: error.message } });
+    const status = error.response?.status || 500;
+    const data = error.response?.data || { error: { message: error.message } };
+    console.error(`[ASR Proxy] Error (HTTP ${status}):`, data);
+    res.status(status).json(data);
   }
 });
 
