@@ -86,9 +86,31 @@ class SignalingClient(
                 put("id", counselorId)
             }
             socket?.emit("register", regData)
-            clientListener.onConnectionStatusChanged("Signaling: Registered as counselor '$counselorId'. Waiting for handoff...")
+            clientListener.onConnectionStatusChanged("Signaling: Registered as counselor ID '$counselorId'.")
         } catch (e: Exception) {
             clientListener.onError("Registration failed: ${e.localizedMessage}")
+        }
+    }
+
+    fun emitCallUser(to: String, roomName: String, callerName: String) {
+        try {
+            val offerObj = JSONObject().apply {
+                put("type", "offer")
+                put("sdp", roomName)
+                put("roomName", roomName)
+            }
+            val callerInfoObj = JSONObject().apply {
+                put("name", callerName)
+            }
+            val data = JSONObject().apply {
+                put("to", to)
+                put("offer", offerObj)
+                put("callerInfo", callerInfoObj)
+            }
+            socket?.emit("call-user", data)
+            Log.d("SignalingClient", "Emitted call-user to target: $to with room: $roomName")
+        } catch (e: Exception) {
+            clientListener.onError("Emitting call failed: ${e.localizedMessage}")
         }
     }
 

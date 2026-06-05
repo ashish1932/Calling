@@ -76,6 +76,7 @@ class AppController {
         window.CounselFlow.clearStorageWarning();
       }, 800);
     }
+    this.initOpdScreen();
     this.initRoleGate();
   }
   bindEventDelegation() {
@@ -153,6 +154,165 @@ class AppController {
       });
     }
   }
+
+  initOpdScreen() {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const previewSection = document.getElementById('preview-section');
+    const previewTbody = document.getElementById('preview-tbody');
+    const recordCount = document.getElementById('record-count');
+    const btnSync = document.getElementById('btn-sync-data');
+    const opdAlerts = document.getElementById('opd-alerts');
+    
+    if (!dropZone || !fileInput) return; // Not on the right screen or DOM element missing
+
+    let parsedData = [];
+
+    const showAlert = (msg, isError = false) => {
+      if (!opdAlerts) return;
+      opdAlerts.innerHTML = `
+        <div style="padding: 16px; border-radius: 8px; background: ${isError ? 'rgba(220,38,38,0.1)' : 'rgba(5,205,153,0.1)'}; color: ${isError ? 'var(--accent-red)' : 'var(--accent-green)'}; border: 1px solid ${isError ? 'var(--accent-red)' : 'var(--accent-green)'};">
+          ${msg}
+        </div>
+      `;
+      setTimeout(() => { opdAlerts.innerHTML = ''; }, 5000);
+    };
+
+    dropZone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.style.background = 'rgba(67,24,255,0.05)';
+    });
+    
+    dropZone.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dropZone.style.background = 'rgba(0,0,0,0.02)';
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.style.background = 'rgba(0,0,0,0.02)';
+      if (e.dataTransfer.files.length > 0) {
+        handleFile(e.dataTransfer.files[0]);
+      }
+    });
+    
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        handleFile(e.target.files[0]);
+      }
+    });
+
+    const handleFile = (file) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          if (typeof XLSX === 'undefined') {
+             showAlert('Excel parser not loaded. Please wait or refresh the page.', true);
+             return;
+          }
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const json = XLSX.utils.sheet_to_json(worksheet, { raw: false });
+          
+          processExcelData(json);
+        } catch (err) {
+          console.error(err);
+          showAlert('Error parsing Excel file. Ensure it is a valid .xlsx or .csv format.', true);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    };
+    
+    const processExcelData = (rows) => {
+      parsedData = [];
+      if (previewTbody) previewTbody.innerHTML = '';
+      
+      if (!rows || rows.length === 0) {
+        showAlert('The uploaded file is empty.', true);
+        return;
+      }
+      
+      rows.forEach(row => {
+        // Look for variations of column names
+        const patientId = row['Patient ID'] || row['Patient_ID'] || row['PatientID'];
+        const date = row['Date of Visit'] || row['Date'] || row['Visit Date'];
+        const medicine = row['Medicine Given'] || row['Medicine'] || row['Drug'];
+        const qty = row['Quantity'] || row['Qty'] || 0;
+        const nextVisit = row['Next Scheduled Visit'] || row['Next Visit'] || row['NextVisit'];
+        
+        if (patientId) {
+          parsedData.push({
+            patientId: patientId,
+            date: date,
+            medicineName: medicine,
+            quantity: parseInt(qty) || 0,
+            nextVisitDate: nextVisit || null
+          });
+          
+          if (previewTbody) {
+            const tr = document.createElement('tr');
+            tr.style.borderBottom = '1px solid var(--border-light)';
+            tr.innerHTML = `
+              <td style="padding: 12px; font-family: monospace;">${patientId || '—'}</td>
+              <td style="padding: 12px;">${date || '—'}</td>
+              <td style="padding: 12px;">${medicine || '—'}</td>
+              <td style="padding: 12px;">${qty || 0}</td>
+              <td style="padding: 12px; color: var(--accent-blue);">${nextVisit || '—'}</td>
+            `;
+            previewTbody.appendChild(tr);
+          }
+        }
+      });
+      
+      if (parsedData.length > 0) {
+        if (recordCount) recordCount.textContent = parsedData.length;
+        if (previewSection) previewSection.style.display = 'block';
+        showAlert(`Successfully parsed ${parsedData.length} records. Please verify and sync.`);
+      } else {
+        showAlert('No valid records found. Ensure the "Patient ID" column exists.', true);
+        if (previewSection) previewSection.style.display = 'none';
+      }
+    };
+    
+    if (btnSync) {
+      btnSync.addEventListener('click', async () => {
+        if (parsedData.length === 0) return;
+        
+        btnSync.disabled = true;
+        btnSync.textContent = 'Syncing...';
+        
+        try {
+          const API_URL = window.CounselFlow.API_BASE || 'http://localhost:5001/api';
+          const response = await fetch(`${API_URL}/opd/upload`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(parsedData)
+          });
+          
+          const result = await response.json();
+          
+          if (response.ok) {
+            showAlert(`Successfully synced ${result.processed} records to the database!`);
+            if (previewSection) previewSection.style.display = 'none';
+            parsedData = [];
+          } else {
+            showAlert(result.error || 'Failed to sync data to the server.', true);
+          }
+        } catch (err) {
+          console.error(err);
+          showAlert('Network error while trying to reach the server.', true);
+        } finally {
+          btnSync.disabled = false;
+          btnSync.textContent = 'Confirm & Sync to Database';
+        }
+      });
+    }
+  }
+
   cacheDOMElements() {
     this.dom.pageTitleText = document.getElementById('page-title-text');
     this.dom.pageSubtitleText = document.getElementById('page-subtitle-text');
@@ -1308,6 +1468,56 @@ class AppController {
         </div>
       `;
     }).join('');
+    this.renderOpdDefaulters(missedCallsContainer, roleConfig);
+  }
+  
+  async renderOpdDefaulters(container, roleConfig) {
+    if (this.activeRole === 'ddrc') return;
+    try {
+      const res = await fetch(`${window.CounselFlow.API_BASE}/opd/defaulters`);
+      if (res.ok) {
+        const defaulters = await res.json();
+        if (defaulters.length > 0) {
+          const panelWrap = container.parentElement?.parentElement;
+          if (panelWrap) panelWrap.style.display = 'block';
+          
+          const defaulterHtml = defaulters.map(pt => {
+            const escapedName = escapeHtml(pt.name || '');
+            const escapedId = escapeHtml(pt.id || '');
+            return `
+              <div class="patient-row" data-patient-id="${escapedId}" style="background: rgba(220,38,38,0.05); border-color: rgba(220,38,38,0.2);">
+                <div class="patient-meta">
+                  <div class="patient-avatar" style="background: var(--accent-orange);">⚠️</div>
+                  <div class="patient-details">
+                    <h4>${roleConfig.canViewPII ? escapedName : '[PII Restricted]'}</h4>
+                    <span style="color: var(--accent-orange);">OPD Defaulter • Missed visit on ${pt.nextOpdVisitDate}</span>
+                  </div>
+                </div>
+                <div>
+                  ${roleConfig.allowedScreens.includes('call-console') ? `
+                  <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="background: var(--accent-orange); font-size:12px; padding: 8px 16px; border:none;">
+                     Call Now
+                  </button>
+                  ` : ''}
+                </div>
+              </div>
+            `;
+          }).join('');
+          container.innerHTML += defaulterHtml;
+          
+          // Bind the newly added call buttons
+          container.querySelectorAll('.btn-call-trigger').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+              const id = e.target.closest('.btn-call-trigger').getAttribute('data-patient-id');
+              const patient = this.patients.find(p => p.id === id);
+              if (patient) this.initiateCallSequence(patient);
+            });
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch OPD defaulters:', e);
+    }
   }
   bindSearchAndFilters() {
     const input = this.dom.patientSearchInput;
@@ -1928,6 +2138,7 @@ class AppController {
     }
     this.renderPatientConditionSummary(patient);
     this.renderPatientSessionLogs();
+    this.renderPatientOpdLogs(patient);
     const startSessionBtn = document.getElementById('btn-detail-start-session');
     if (startSessionBtn) {
       startSessionBtn.style.display = roleConfig.allowedScreens.includes('call-console') ? '' : 'none';
@@ -2062,6 +2273,52 @@ class AppController {
         <div style="margin-top: 10px; display: flex; justify-content: flex-end;">${audioUI}</div>
       </div>
     `}).join('');
+  }
+  
+  async renderPatientOpdLogs(patient) {
+    const listContainer = document.getElementById('detail-opd-logs-list');
+    const badge = document.getElementById('opd-next-visit-badge');
+    if (!listContainer) return;
+    
+    if (patient.nextOpdVisitDate) {
+      const today = new Date().toISOString().split('T')[0];
+      const isPast = patient.nextOpdVisitDate < today;
+      badge.textContent = `Next Visit: ${patient.nextOpdVisitDate}`;
+      badge.style.color = isPast ? 'var(--accent-red)' : 'var(--accent-green)';
+      badge.style.background = isPast ? 'rgba(220,38,38,0.1)' : 'rgba(5,205,153,0.1)';
+      badge.style.border = `1px solid ${isPast ? 'var(--accent-red)' : 'var(--accent-green)'}`;
+    } else {
+      badge.textContent = 'Next Visit: Not scheduled';
+      badge.style.color = 'var(--text-muted)';
+      badge.style.background = 'rgba(0,0,0,0.1)';
+      badge.style.border = 'none';
+    }
+
+    listContainer.innerHTML = '<div style="text-align:center; color:var(--text-muted); font-size:12px; margin-top:20px;">Fetching logs...</div>';
+    
+    try {
+      const res = await fetch(`http://localhost:5001/api/opd/logs/${patient.id}`);
+      if (!res.ok) throw new Error('Failed to fetch');
+      const logs = await res.json();
+      
+      if (logs.length === 0) {
+        listContainer.innerHTML = '<div style="text-align:center; color:var(--text-muted); font-size:12px; margin-top:20px;">No OPD records found.</div>';
+        return;
+      }
+      
+      listContainer.innerHTML = logs.map(log => `
+        <div style="padding: 12px; border-bottom: 1px solid var(--border-light); background: var(--bg-card);">
+          <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+            <span style="font-weight:600; font-size:13px; color: var(--text-primary);">${escapeHtml(log.medicineName)}</span>
+            <span style="font-size:11px; color:var(--text-muted);">${log.date}</span>
+          </div>
+          <div style="font-size:12px; color:var(--text-secondary);">Qty: ${log.quantity}</div>
+        </div>
+      `).join('');
+    } catch (e) {
+      console.error(e);
+      listContainer.innerHTML = '<div style="text-align:center; color:var(--accent-red); font-size:12px; margin-top:20px;">Error fetching records.</div>';
+    }
   }
   async openPatientDetailById(id) {
     if (this.isNotesDirty) {
@@ -3469,7 +3726,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     const ROLES = window.CounselFlow.ROLES;
     const leadership = CREDS.filter(c => c.roleKey === 'spo' || c.roleKey === 'supervisor');
     const counselors = CREDS.filter(c => c.roleKey === 'counsellor');
-    const support = CREDS.filter(c => c.roleKey === 'ddrc' || c.roleKey === 'ditsu');
+    const support = CREDS.filter(c => c.roleKey === 'ddrc' || c.roleKey === 'ditsu' || c.roleKey === 'opd_staff');
     let existing = document.getElementById('modal-login-screen');
     if (existing) existing.remove();
     const overlay = document.createElement('div');
@@ -3501,7 +3758,9 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
         <div style="flex: 1; min-width: 320px; max-width: 440px; display:flex; flex-direction:column; justify-content:center;">
           <!-- Logo / Title -->
           <div style="text-align:center; margin-bottom:24px;">
-            <div class="login-title-glow" style="font-size:52px; margin-bottom:8px;"></div>
+            <div class="login-title-glow" style="margin-bottom:8px;">
+              <img src="assets/punjab-logo.svg" alt="Govt. of Punjab" style="width: 64px; height: 64px; object-fit: contain; margin-bottom: 8px;">
+            </div>
             <h1 style="font-size:28px; font-weight:800; color:var(--text-primary); margin-bottom:4px; letter-spacing:-0.5px;">CounselFlow</h1>
             <p style="font-size:12px; color:var(--text-secondary); letter-spacing:0.5px;">Tele-Counseling Platform • Community Bridge Model</p>
           </div>
@@ -3888,7 +4147,10 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
       distFilter.style.display = ['spo', 'supervisor'].includes(roleKey) ? '' : 'none';
     }
     this.renderEscalationPanel();
-    this.switchScreen('dashboard');
+    
+    // Switch to first allowed screen or dashboard
+    const defaultScreen = role.allowedScreens.length > 0 ? role.allowedScreens[0] : 'dashboard';
+    this.switchScreen(defaultScreen);
   }
   renderSessionScoreCard(summaryObj, transcriptArray) {
     const container = document.getElementById('session-score-card');

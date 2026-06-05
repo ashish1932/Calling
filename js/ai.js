@@ -318,21 +318,22 @@ The JSON object must have EXACTLY these fields:
   async transcribeAudioChunkAsync(audioBlob, languageCode = 'en') {
 
     // Skip sending if the audio chunk is too small (prevents 400 Bad Requests and reduces hallucinations on silence)
-    if (audioBlob.size < 8000) return null;
+    if (audioBlob.size < 1000) return null;
 
     try {
       const formData = new FormData();
       // Groq Whisper supports flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
       formData.append("file", audioBlob, "chunk.webm");
-      formData.append("model", "whisper-large-v3");
+      formData.append("model", "whisper-large-v3-turbo");
+      // Force language to prevent hallucinations in other languages (like Hungarian or Spanish)
+      let whisperLang = 'en';
+      if (languageCode.startsWith('hi')) whisperLang = 'hi';
+      else if (languageCode.startsWith('pa')) whisperLang = 'pa';
+      formData.append("language", whisperLang);
       
-      // Do NOT force a language hint — let Whisper auto-detect
-      // Forcing 'pa' or 'hi' causes hallucinations in silence
       formData.append("response_format", "json");
       // Ask Whisper to not transcribe if the audio is likely silence
-      formData.append("temperature", "0");
-      formData.append("prompt", "Counselor and patient are speaking about addiction recovery.");
-
+      // (Removed hardcoded prompt and temperature per user request)
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"

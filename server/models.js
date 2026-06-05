@@ -28,6 +28,7 @@ const PatientSchema = new mongoose.Schema({
   consent: Boolean,
   lastSessionDate: String,
   history: [mongoose.Schema.Types.Mixed],
+  nextOpdVisitDate: String,
   escalation: {
     level: Number,
     reason: String,
@@ -72,9 +73,20 @@ const CounselorSchema = new mongoose.Schema({
   avatar: String
 }, { timestamps: true, strict: false });
 
+const MedicationLogSchema = new mongoose.Schema({
+  logId: { type: String, required: true, unique: true },
+  patientId: String,
+  date: String,
+  medicineName: String,
+  quantity: Number,
+  nextVisitDate: String,
+  uploadedBy: String
+}, { timestamps: true, strict: false });
+
 module.exports = {
   Patient: mongoose.model('Patient', PatientSchema),
   CallLog: mongoose.model('CallLog', CallLogSchema),
   AuditTrail: mongoose.model('AuditTrail', AuditTrailSchema),
-  Counselor: mongoose.model('Counselor', CounselorSchema)
+  Counselor: mongoose.model('Counselor', CounselorSchema),
+  MedicationLog: mongoose.model('MedicationLog', MedicationLogSchema)
 };

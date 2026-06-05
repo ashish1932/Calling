@@ -1,0 +1,9 @@
+{"lvl":"info","msg":"no configuration paths supplied","t":"2026-06-03T22:08:51.1751307+05:30"}
+{"lvl":"info","msg":"using configuration at default config path","path":"C:\\Users\\aryas\\AppData\\Local/ngrok/ngrok.yml","t":"2026-06-03T22:08:51.176695+05:30"}
+{"err":"\u003cnil\u003e","lvl":"info","msg":"open config file","path":"C:\\Users\\aryas\\AppData\\Local\\ngrok\\ngrok.yml","t":"2026-06-03T22:08:51.1834789+05:30"}
+{"enabled":false,"lvl":"info","msg":"FIPS 140 mode","t":"2026-06-03T22:08:51.1850037+05:30"}
+{"addr":"127.0.0.1:4040","allow_hosts":null,"lvl":"info","msg":"starting web service","obj":"web","t":"2026-06-03T22:08:51.2008132+05:30"}
+{"lvl":"info","msg":"client session established","obj":"tunnels.session","t":"2026-06-03T22:08:52.1861943+05:30"}
+{"lvl":"info","msg":"tunnel session started","obj":"tunnels.session","t":"2026-06-03T22:08:52.1913115+05:30"}
+{"lvl":"info","msg":"update available","obj":"updater","t":"2026-06-03T22:08:52.5732934+05:30"}
+{"addr":"http://localhost:5001","lvl":"info","msg":"started tunnel","name":"command_line","obj":"tunnels","t":"2026-06-03T22:08:52.6561218+05:30","url":"https://economist-slideshow-flannels.ngrok-free.dev"}

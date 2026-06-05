@@ -97,3 +97,9 @@ if (fs.existsSync(indexHtmlPath)) {
 }
 
 console.log("🎉 Production build complete! Deployable assets are stored inside the '/dist' directory.");
+
+// Copy assets folder if it exists
+if (fs.existsSync(path.join(__dirname, 'assets'))) {
+  fs.cpSync(path.join(__dirname, 'assets'), path.join(distDir, 'assets'), { recursive: true });
+  console.log('? Assets folder successfully copied to dist/assets');
+}

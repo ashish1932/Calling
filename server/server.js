@@ -11,7 +11,7 @@ const FormData = require('form-data');
 const { Server } = require('socket.io');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-const { Patient, CallLog, AuditTrail, Counselor } = require('./models');
+const { Patient, CallLog, AuditTrail, Counselor, MedicationLog } = require('./models');
 const { AccessToken } = require('livekit-server-sdk');
 const admin = require('firebase-admin');
 const fs = require('fs');
@@ -384,6 +384,73 @@ app.post('/api/audit-trail', authenticateJWT, async (req, res) => {
 });
 
 // ==========================================
+// OPD API
+// ==========================================
+
+app.post('/api/opd/upload', authenticateJWT, async (req, res) => {
+  try {
+    const records = req.body;
+    if (!Array.isArray(records)) {
+      return res.status(400).json({ error: 'Expected an array of OPD records' });
+    }
+    
+    // Process records: create MedicationLog entries and update Patient nextOpdVisitDate
+    let processed = 0;
+    for (const record of records) {
+      if (!record.patientId || !record.date || !record.medicineName) continue;
+      
+      const logId = `OPD-${Date.now()}-${Math.floor(Math.random()*10000)}`;
+      
+      await MedicationLog.create({
+        logId: logId,
+        patientId: record.patientId,
+        date: record.date,
+        medicineName: record.medicineName,
+        quantity: record.quantity || 0,
+        nextVisitDate: record.nextVisitDate || null,
+        uploadedBy: req.user?.id || 'OPD_STAFF'
+      });
+      
+      // Update patient's next visit date if provided
+      if (record.nextVisitDate) {
+        await Patient.updateOne(
+          { id: record.patientId },
+          { $set: { nextOpdVisitDate: record.nextVisitDate } }
+        );
+      }
+      processed++;
+    }
+    
+    res.json({ success: true, processed, message: 'OPD data uploaded successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/opd/logs/:patientId', authenticateJWT, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const logs = await MedicationLog.find({ patientId }).sort({ date: -1 });
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/opd/defaulters', authenticateJWT, async (req, res) => {
+  try {
+    // A defaulter is someone whose nextOpdVisitDate is less than today's date
+    const today = new Date().toISOString().split('T')[0];
+    const defaulters = await Patient.find({ 
+      nextOpdVisitDate: { $lt: today, $ne: null }
+    });
+    res.json(defaulters);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
 // AI PROXY ENDPOINTS (GROQ)
 // ==========================================
 const upload = multer({ storage: multer.memoryStorage() });
@@ -574,7 +641,7 @@ io.on('connection', (socket) => {
   // 2. Counselor initiates a call to a patient (sends WebRTC Offer)
   socket.on('call-user', (data) => {
     // data = { to: 'patientId', offer: RTCSessionDescriptionInit, callerInfo: { name, avatar } }
-    const targetSocket = patientSockets[data.to];
+    const targetSocket = patientSockets[data.to] || counselorSockets[data.to] || counselorSockets['counselor'];
     if (targetSocket) {
       console.log(`📞 Counselor calling patient ${data.to}`);
       io.to(targetSocket).emit('call-made', {
@@ -726,7 +793,7 @@ io.on('connection', (socket) => {
 // ==========================================
 
 // Endpoint to generate a LiveKit token for a room
-app.post('/api/livekit/token', authenticateJWT, (req, res) => {
+app.post('/api/livekit/token', authenticateJWT, async (req, res) => {
   const { roomName, participantName, isCounselor } = req.body;
 
   const apiKey = process.env.LIVEKIT_API_KEY;
@@ -746,7 +813,8 @@ app.post('/api/livekit/token', authenticateJWT, (req, res) => {
     });
     at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
 
-    res.json({ token: at.toJwt() });
+    const jwtToken = await at.toJwt();
+    res.json({ token: jwtToken });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

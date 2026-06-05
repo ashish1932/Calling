@@ -114,6 +114,28 @@ class SignalingClient(
         }
     }
 
+    fun emitCallUser(to: String, roomName: String, callerName: String) {
+        try {
+            val offerObj = JSONObject().apply {
+                put("type", "offer")
+                put("sdp", roomName)
+                put("roomName", roomName)
+            }
+            val callerInfoObj = JSONObject().apply {
+                put("name", callerName)
+            }
+            val data = JSONObject().apply {
+                put("to", to)
+                put("offer", offerObj)
+                put("callerInfo", callerInfoObj)
+            }
+            socket?.emit("call-user", data)
+            Log.d("SignalingClient", "Emitted call-user to target: $to with room: $roomName")
+        } catch (e: Exception) {
+            clientListener.onError("Emitting call failed: ${e.localizedMessage}")
+        }
+    }
+
     fun emitAnswer(to: String, answerSdp: String) {
         try {
             val answerObj = JSONObject().apply {

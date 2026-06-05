@@ -148,7 +148,8 @@ fun MainScreen(viewModel: CallViewModel) {
                         CallState.WAITING -> {
                             WaitingForCallsView(
                                 patientId = patientId,
-                                onDisconnect = { viewModel.disconnect() }
+                                onDisconnect = { viewModel.disconnect() },
+                                viewModel = viewModel
                             )
                         }
 
@@ -445,7 +446,8 @@ fun ConnectingView(patientId: String, onCancel: () -> Unit) {
 @Composable
 fun WaitingForCallsView(
     patientId: String,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    viewModel: CallViewModel? = null
 ) {
     // Beautiful dynamic pulsing beacon antenna wave
     var pulseState by remember { mutableStateOf(0f) }
@@ -560,6 +562,25 @@ fun WaitingForCallsView(
             }
 
             Spacer(modifier = Modifier.height(28.dp))
+
+            Button(
+                onClick = { viewModel?.startCall("counselor") ?: Unit },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Call,
+                    contentDescription = "Call",
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Call Counselor", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Button(
                 onClick = onDisconnect,

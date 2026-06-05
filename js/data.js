@@ -1192,6 +1192,19 @@ const ROLES = {
     canExportAll: true,
     canBulkDeleteLogs: true,
     description: 'State Admin. Highest authority with full platform control, monitoring, user governance, and security configuration.'
+  },
+  'opd_staff': {
+    label: 'OPD Medication Staff',
+    emoji: '💊',
+    color: 'var(--accent-green)',
+    allowedScreens: ['opd'],
+    canViewPII: true,
+    canDeleteTranscript: false,
+    canResolveEscalation: false,
+    escalationLevels: [],
+    canViewAuditTrail: false,
+    canExportAll: false,
+    description: 'Upload and manage daily medication dispensation records for outpatients.'
   }
 };
 
@@ -1297,6 +1310,13 @@ const DEMO_CREDENTIALS = [
     password: 'CBM@DITSU24',
     name:     'Er. Navneet Sharma',
     staffId:  'STAFF-008'
+  },
+  {
+    roleKey:  'opd_staff',
+    username: 'opd@cbm.gov.in',
+    password: 'CBM@OPD24',
+    name:     'OPD Coordinator',
+    staffId:  'STAFF-012'
   }
 ];
 

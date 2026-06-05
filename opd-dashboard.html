@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OPD Medication Dashboard</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/styles.css">
+  <!-- Include SheetJS for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+  <div id="app-container">
+    <!-- Main Window Content -->
+    <main id="main-content" style="margin-left: 0;">
+      <header style="left: 0; width: 100%;">
+        <div class="header-title">
+          <h1 id="page-title-text">OPD Medication Upload Center</h1>
+          <p id="page-subtitle-text">Log daily dispensed medications and track adherence</p>
+        </div>
+        <div class="header-actions">
+           <a href="index.html" class="btn-secondary" style="text-decoration:none;">Go to Counselor Dashboard</a>
+        </div>
+      </header>
+
+      <section class="screen-content active" style="padding-top: 100px;">
+        <div class="dashboard-sections" style="display:block;">
+          
+          <div class="section-box" style="width: 100%; text-align: center; padding: 40px; border: 2px dashed var(--border-light); background: rgba(0,0,0,0.02); cursor: pointer;" id="drop-zone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" style="margin-bottom:16px;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <h2>Upload OPD Dispensation Sheet</h2>
+            <p style="color: var(--text-muted); margin-bottom: 20px;">Drag and drop your .xlsx or .csv file here, or click to browse</p>
+            <input type="file" id="file-input" accept=".xlsx, .xls, .csv" style="display: none;">
+            <button class="btn-primary" onclick="document.getElementById('file-input').click()">Browse Files</button>
+            
+            <div style="margin-top: 20px; text-align: left; background: var(--bg-card); padding: 16px; border-radius: 8px; display: inline-block; border: 1px solid var(--border-light);">
+              <h4 style="margin-bottom: 8px;">Required Columns:</h4>
+              <ul style="font-size: 13px; color: var(--text-secondary); margin-left: 16px;">
+                <li><code>Patient ID</code> (e.g. PAT-001)</li>
+                <li><code>Date of Visit</code> (e.g. 2026-05-23)</li>
+                <li><code>Medicine Given</code> (e.g. Buprenorphine)</li>
+                <li><code>Quantity</code> (e.g. 5)</li>
+                <li><code>Next Scheduled Visit</code> (e.g. 2026-05-30)</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div id="preview-section" style="display: none; margin-top: 30px;">
+            <div class="section-header">
+              <h2>Data Preview (<span id="record-count">0</span> records)</h2>
+              <button class="btn-primary" id="btn-sync-data">Confirm & Sync to Database</button>
+            </div>
+            
+            <div class="list-scrollable" style="max-height: 400px; overflow: auto; border: 1px solid var(--border-light); border-radius: 8px;">
+              <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 13px;" id="preview-table">
+                <thead>
+                  <tr style="background: rgba(0,0,0,0.1); border-bottom: 1px solid var(--border-light);">
+                    <th style="padding: 12px; font-weight: 600;">Patient ID</th>
+                    <th style="padding: 12px; font-weight: 600;">Visit Date</th>
+                    <th style="padding: 12px; font-weight: 600;">Medicine</th>
+                    <th style="padding: 12px; font-weight: 600;">Qty</th>
+                    <th style="padding: 12px; font-weight: 600;">Next Visit</th>
+                  </tr>
+                </thead>
+                <tbody id="preview-tbody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          <!-- Alert Area -->
+          <div id="opd-alerts" style="margin-top: 20px;"></div>
+
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="js/opd-app.js"></script>
+</body>
+</html>

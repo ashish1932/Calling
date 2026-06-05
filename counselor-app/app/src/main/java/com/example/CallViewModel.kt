@@ -146,6 +146,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun answerCall() {
+        if (_callState.value != CallState.INCOMING) return
+
         val offerSdp = savedOfferSdp
         val callerId = savedCallerId ?: ""
         if (offerSdp == null || callerId.isBlank()) {
@@ -181,6 +183,35 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         // WebRTC preparation & answer emission
         webRTCManager?.prepareCall(offerSdp) { answerSdp ->
             signalingClient?.emitAnswer(callerId, answerSdp)
+            _callState.value = CallState.ACTIVE
+            startTimer()
+        }
+    }
+
+    fun startCall(targetId: String) {
+        val roomName = "room-${java.util.UUID.randomUUID().toString().substring(0, 8)}"
+        val myName = _counselorId.value.ifBlank { "Counselor" }
+        addLog("LiveKit: Initiating call to $targetId in room $roomName")
+
+        _callState.value = CallState.CONNECTING
+        savedCallerId = targetId
+        savedOfferSdp = roomName
+
+        signalingClient?.emitCallUser(targetId, roomName, myName)
+
+        // Setup WebRTCManager
+        webRTCManager = WebRTCManager(
+            context = getApplication(),
+            serverUrl = _serverUrl.value,
+            listener = object : WebRTCManager.Listener {
+                override fun onWebRTCLog(message: String) { addLog(message) }
+                override fun onLocalIceCandidate(candidateSdp: String, sdpMid: String, sdpMLineIndex: Int) {}
+                override fun onTrackAdded() { addLog("WebRTC: Remote audio track added to connection.") }
+                override fun onError(message: String) { addLog("WebRTC Error: $message") }
+            }
+        )
+
+        webRTCManager?.prepareCall(roomName) {
             _callState.value = CallState.ACTIVE
             startTimer()
         }

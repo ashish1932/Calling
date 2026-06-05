@@ -4,9 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <!-- NOTE: CSP allows 'unsafe-inline' for style-src because the dynamic UI relies heavily on inline styles. While acceptable for this internal tool, ensure all user inputs are sanitized to prevent XSS. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:5001 https://cdn.socket.io https://infird.com https://overbridgenet.com https://static.cloudflareinsights.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' http://localhost:5001 ws://localhost:5001 https://*.ngrok-free.dev https://*.ngrok.io https://api.groq.com https://cdn.socket.io https://infird.com https://overbridgenet.com wss://*.livekit.cloud https://*.livekit.cloud;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:5001 https://cdn.socket.io https://infird.com https://overbridgenet.com https://static.cloudflareinsights.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://upload.wikimedia.org; connect-src 'self' http://localhost:5001 ws://localhost:5001 https://*.ngrok-free.dev https://*.ngrok.io https://api.groq.com https://cdn.socket.io https://infird.com https://overbridgenet.com wss://*.livekit.cloud https://*.livekit.cloud https://cdn.jsdelivr.net https://cdnjs.cloudflare.com;">
   <title>Tele-Counseling & Summarization Dashboard</title>
   <link rel="icon" href="data:,">
+  <!-- Include SheetJS for Excel parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <link rel="stylesheet" href="css/styles.bundle.css">
 </head>
 <body>
@@ -16,7 +18,7 @@
     <!-- Mobile Top Bar (Visible only on small screens) -->
     <div id="mobile-top-bar" style="display: none; width: 100%; height: 60px; background: var(--bg-card); border-bottom: 1px solid var(--border-light); align-items: center; justify-content: space-between; padding: 0 16px; z-index: 100;">
       <div class="logo-container" style="padding: 0; border: none; margin: 0;">
-        <div class="logo-icon" style="width: 32px; height: 32px; font-size: 16px;">C</div>
+        <img src="assets/punjab-logo.svg" alt="Govt. of Punjab" style="width: 32px; height: 32px; object-fit: contain;">
         <div class="logo-text">
           <h2 style="font-size: 16px;">CounselFlow</h2>
         </div>
@@ -32,7 +34,7 @@
     <!-- Sidebar Navigation -->
     <aside>
       <div class="logo-container">
-        <div class="logo-icon">C</div>
+        <img src="assets/punjab-logo.svg" alt="Govt. of Punjab" style="width: 40px; height: 40px; object-fit: contain;">
         <div class="logo-text">
           <h2>CounselFlow</h2>
           <span>Tele-Counseling AI</span>
@@ -320,6 +322,17 @@
                 </div>
                 <div class="list-scrollable sessions-history-list" id="detail-sessions-list" style="flex-grow: 1; overflow-y: auto;">
                   <!-- Session list -->
+                </div>
+              </div>
+              
+              <!-- OPD Medication History -->
+              <div class="section-box" style="height: auto; max-height: 300px; display: flex; flex-direction: column;">
+                <div class="section-header" style="flex-shrink: 0; margin-bottom: 16px;">
+                  <h3 style="display:flex; align-items:center; gap:8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg> OPD Dispensation Log</h3>
+                  <span id="opd-next-visit-badge" style="font-size: 11px; padding: 4px 8px; border-radius: 12px; background: rgba(5,205,153,0.1); color: var(--accent-green); font-weight: 600;">Next Visit: —</span>
+                </div>
+                <div class="list-scrollable" id="detail-opd-logs-list" style="flex-grow: 1; overflow-y: auto;">
+                  <div style="text-align:center; color:var(--text-muted); font-size:12px; margin-top:20px;">Loading OPD logs...</div>
                 </div>
               </div>
             </div>
@@ -737,6 +750,62 @@
         </div>
       </section>
 
+      <!-- OPD Dashboard Screen -->
+      <section id="screen-opd" class="screen-content" style="padding-top: 40px;">
+        <div class="dashboard-sections" style="display:block;">
+          
+          <div class="section-box" style="width: 100%; text-align: center; padding: 40px; border: 2px dashed var(--border-light); background: rgba(0,0,0,0.02); cursor: pointer;" id="drop-zone">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" style="margin-bottom:16px;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <h2>Upload OPD Dispensation Sheet</h2>
+            <p style="color: var(--text-muted); margin-bottom: 20px;">Drag and drop your .xlsx or .csv file here, or click to browse</p>
+            <input type="file" id="file-input" accept=".xlsx, .xls, .csv" style="display: none;">
+            <button class="btn-primary" onclick="document.getElementById('file-input').click()">Browse Files</button>
+            
+            <div style="margin-top: 20px; text-align: left; background: var(--bg-card); padding: 16px; border-radius: 8px; display: inline-block; border: 1px solid var(--border-light);">
+              <h4 style="margin-bottom: 8px;">Required Columns:</h4>
+              <ul style="font-size: 13px; color: var(--text-secondary); margin-left: 16px;">
+                <li><code>Patient ID</code> (e.g. PAT-001)</li>
+                <li><code>Date of Visit</code> (e.g. 2026-05-23)</li>
+                <li><code>Medicine Given</code> (e.g. Buprenorphine)</li>
+                <li><code>Quantity</code> (e.g. 5)</li>
+                <li><code>Next Scheduled Visit</code> (e.g. 2026-05-30)</li>
+              </ul>
+            </div>
+          </div>
+          
+          <div id="preview-section" style="display: none; margin-top: 30px;">
+            <div class="section-header">
+              <h2>Data Preview (<span id="record-count">0</span> records)</h2>
+              <button class="btn-primary" id="btn-sync-data">Confirm & Sync to Database</button>
+            </div>
+            
+            <div class="list-scrollable" style="max-height: 400px; overflow: auto; border: 1px solid var(--border-light); border-radius: 8px;">
+              <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 13px;" id="preview-table">
+                <thead>
+                  <tr style="background: rgba(0,0,0,0.1); border-bottom: 1px solid var(--border-light);">
+                    <th style="padding: 12px; font-weight: 600;">Patient ID</th>
+                    <th style="padding: 12px; font-weight: 600;">Visit Date</th>
+                    <th style="padding: 12px; font-weight: 600;">Medicine</th>
+                    <th style="padding: 12px; font-weight: 600;">Qty</th>
+                    <th style="padding: 12px; font-weight: 600;">Next Visit</th>
+                  </tr>
+                </thead>
+                <tbody id="preview-tbody">
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          <!-- Alert Area -->
+          <div id="opd-alerts" style="margin-top: 20px;"></div>
+
+        </div>
+      </section>
+
     </main>
     
   </div>
@@ -888,6 +957,7 @@
    
   <!-- System Javascript scripts -->
   <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
     <script src="js/app.bundle.js" defer></script>
 </body>
 </html>

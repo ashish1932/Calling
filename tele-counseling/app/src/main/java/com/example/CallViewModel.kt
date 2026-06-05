@@ -146,9 +146,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun answerCall() {
-        val offerSdp = savedOfferSdp
+        if (_callState.value != CallState.INCOMING) return
+
         val callerId = savedCallerId ?: ""
-        if (offerSdp == null || callerId.isBlank()) {
+        if (savedOfferSdp == null || callerId.isBlank()) {
             addLog("Error: Cannot answer call. Missing offer or caller ID.")
             return
         }
@@ -179,8 +180,37 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         // WebRTC preparation & answer emission
-        webRTCManager?.prepareCall(offerSdp) { answerSdp ->
+        webRTCManager?.prepareCall(savedOfferSdp!!) { answerSdp ->
             signalingClient?.emitAnswer(callerId, answerSdp)
+            _callState.value = CallState.ACTIVE
+            startTimer()
+        }
+    }
+
+    fun startCall(targetId: String) {
+        val roomName = "room-${java.util.UUID.randomUUID().toString().substring(0, 8)}"
+        val myName = _patientId.value.ifBlank { "Patient" }
+        addLog("LiveKit: Initiating call to $targetId in room $roomName")
+
+        _callState.value = CallState.CONNECTING
+        savedCallerId = targetId
+        savedOfferSdp = roomName
+
+        signalingClient?.emitCallUser(targetId, roomName, myName)
+
+        // Setup WebRTCManager
+        webRTCManager = WebRTCManager(
+            context = getApplication(),
+            serverUrl = _serverUrl.value,
+            listener = object : WebRTCManager.Listener {
+                override fun onWebRTCLog(message: String) { addLog(message) }
+                override fun onLocalIceCandidate(candidateSdp: String, sdpMid: String, sdpMLineIndex: Int) {}
+                override fun onTrackAdded() { addLog("WebRTC: Remote audio track added to connection.") }
+                override fun onError(message: String) { addLog("WebRTC Error: $message") }
+            }
+        )
+
+        webRTCManager?.prepareCall(roomName) {
             _callState.value = CallState.ACTIVE
             startTimer()
         }

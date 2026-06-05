@@ -303,9 +303,10 @@ class CallManager {
                 "कर दो", "झाल", "अलवूँ", "जरूर जो",
                 "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
                 "bye bye", "goodbye", "see you", "okay okay okay",
+                "hello", "all right", "yeah", "okay", "yes", "no",
                 ".   .", ". . .", "...",
               ];
-              const tLower = t.toLowerCase();
+              const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
               if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
 
               return false;
@@ -756,21 +757,20 @@ class CallManager {
       document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
     }, 1000);
 
-    // Initialize Live Transcription when call connects (using Groq Whisper chunking)
+    // In the new App-to-App LiveKit architecture, the Dashboard acts as an observer.
+    // Transcription is wired up dynamically when remote tracks are subscribed (in initLiveKit).
     if (!this.isRecording) {
       this.addWarningToTranscriptLog(
         "Recording Consent Denied", 
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
       );
-    } else if (this.localStream) {
-      this.initLiveTranscription();
     } else {
       this.addWarningToTranscriptLog(
-        "Microphone Error",
-        "Could not access microphone stream. Transcription cannot start."
+        "AI Observer Active",
+        "The Dashboard is observing the call. Transcription will start automatically when the patient and counselor speak."
       );
     }
-
+    
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
   }
 
