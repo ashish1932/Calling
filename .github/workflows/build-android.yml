@@ -39,22 +39,3 @@ jobs:
       with:
         name: PatientApp-APK
         path: tele-counseling/app/build/outputs/apk/debug/app-debug.apk
-
-    # BUILD COUNSELOR APP
-    - name: Generate Gradle Wrapper (Counselor App)
-      working-directory: ./counselor-app
-      run: gradle wrapper
-
-    - name: Grant execute permission for gradlew (Counselor App)
-      working-directory: ./counselor-app
-      run: chmod +x gradlew
-
-    - name: Build debug APK (Counselor App)
-      working-directory: ./counselor-app
-      run: ./gradlew clean assembleDebug --no-daemon --no-build-cache --stacktrace
-
-    - name: Upload Counselor APK as Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: CounselorApp-APK
-        path: counselor-app/app/build/outputs/apk/debug/app-debug.apk
