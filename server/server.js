@@ -1,3 +1,7 @@
+const crypto = require('crypto');
+if (!global.crypto) {
+  global.crypto = crypto;
+}
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
@@ -5,22 +9,108 @@ const cors = require('cors');
 const axios = require('axios');
 const http = require('http');
 const path = require('path');
-const crypto = require('crypto');
 const multer = require('multer');
 const FormData = require('form-data');
 const { Server } = require('socket.io');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
+// Validate environment variables on boot
+const REQUIRED_ENV = ['GROQ_API_KEY', 'MONGODB_URI', 'JWT_SECRET'];
+const missingEnv = REQUIRED_ENV.filter(key => {
+  const val = process.env[key];
+  return !val || val === 'your_groq_api_key_here' || val === 'your_gemini_api_key_here';
+});
+if (missingEnv.length > 0) {
+  console.error(`🚨 CRITICAL: Missing or unconfigured required environment variables: ${missingEnv.join(', ')}`);
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
+}
+
 const { Patient, CallLog, AuditTrail, Counselor } = require('./models');
 
-// JWT authentication middleware placeholder
-// TODO: Replace with real JWT verification when auth is implemented
+// JWT Secret and Helpers (HMAC-SHA256 Pure JS implementation)
+const JWT_SECRET = process.env.JWT_SECRET || 'counsel-flow-super-secret-key-2026';
+
+function base64url(str, encoding = 'utf8') {
+  return Buffer.from(str, encoding).toString('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+}
+
+function base64urlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) {
+    str += '=';
+  }
+  return Buffer.from(str, 'base64').toString('utf8');
+}
+
+function signJWT(payload) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const encodedHeader = base64url(JSON.stringify(header));
+  const encodedPayload = base64url(JSON.stringify({
+    ...payload,
+    exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours expiration
+  }));
+  
+  const signatureInput = `${encodedHeader}.${encodedPayload}`;
+  const signature = crypto.createHmac('sha256', JWT_SECRET)
+    .update(signatureInput)
+    .digest('base64')
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+    
+  return `${signatureInput}.${signature}`;
+}
+
+function verifyJWT(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    
+    const [header, payload, signature] = parts;
+    const signatureInput = `${header}.${payload}`;
+    
+    const expectedSignature = crypto.createHmac('sha256', JWT_SECRET)
+      .update(signatureInput)
+      .digest('base64')
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+      
+    if (signature !== expectedSignature) {
+      return null;
+    }
+    
+    const decodedPayload = JSON.parse(base64urlDecode(payload));
+    if (decodedPayload.exp && decodedPayload.exp < Math.floor(Date.now() / 1000)) {
+      return null; // Expired
+    }
+    
+    return decodedPayload;
+  } catch (e) {
+    return null;
+  }
+}
+
 const authenticateJWT = (req, res, next) => {
-  // Pass-through for now — no JWT validation configured
-  next();
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    const user = verifyJWT(token);
+    if (user) {
+      req.user = user;
+      return next();
+    }
+  }
+  return res.status(401).json({ error: 'Unauthorized: Invalid or missing token' });
 };
 
 const app = express();
+app.set('trust proxy', 1);
 
 // Security middleware to block sensitive files
 app.use((req, res, next) => {
@@ -31,26 +121,72 @@ app.use((req, res, next) => {
   next();
 });
 
+// CORS origin safety check
+const allowedOriginsEnv = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : [];
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Allow non-browser agents (mobile app, curl, same-origin static assets)
+  if (allowedOriginsEnv.length > 0) {
+    return allowedOriginsEnv.includes(origin);
+  }
+  try {
+    const parsedUrl = new URL(origin);
+    const hostname = parsedUrl.hostname;
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.endsWith('.ngrok-free.dev') ||
+      hostname.endsWith('.ngrok.io')
+    );
+  } catch (e) {
+    return false;
+  }
+};
+
 // Serve the main application frontend directly from this server
 app.use(express.static(path.join(__dirname, '../')));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // allow any origin since front-end might run on file:// or another port
-    methods: ["GET", "POST"]
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
+app.use(express.json({ limit: '5mb' }));
 
 // Rate limiting setup
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10000, // Limit each IP to 10000 requests per windowMs to prevent testing blockages
+  max: 600, // Reduced from 10000 to defend against basic denial-of-service
   message: { error: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', apiLimiter);
+
+// Add ngrok bypass header dynamically
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV !== 'production' || req.headers.host?.includes('ngrok')) {
+    res.setHeader('ngrok-skip-browser-warning', '1');
+  }
+  next();
+});
 
 // CSRF Protection Middleware
 // Require a custom header 'X-Requested-With' for state-changing endpoints
@@ -107,8 +243,83 @@ app.get('/api/ice-servers', (req, res) => {
 
 
 
+// ==========================================
+// AUTHENTICATION API
+// ==========================================
+
+const DEMO_CREDENTIALS = [
+  { roleKey: 'spo', username: 'spo@cbm.gov.in', password: 'CBM@SPOwner24', name: 'Sh. Gurinder Bhullar IAS', staffId: 'STAFF-001' },
+  { roleKey: 'supervisor', username: 'supervisor@cbm.gov.in', password: 'CBM@Supervisor24', name: 'Dr. Rajdeep Singh', staffId: 'STAFF-002' },
+  { roleKey: 'counsellor', username: 'counsellor_amritsar@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Amanpreet Kaur', staffId: 'STAFF-003', district: 'Amritsar' },
+  { roleKey: 'counsellor', username: 'counselor-1', password: 'CBM@Counsellor24', name: 'Dr. Amanpreet Kaur', staffId: 'STAFF-003', district: 'Amritsar' },
+  { roleKey: 'counsellor', username: 'counsellor_jalandhar@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Manpreet Sodhi', staffId: 'STAFF-004', district: 'Jalandhar' },
+  { roleKey: 'counsellor', username: 'counsellor_ludhiana@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Harinder Gill', staffId: 'STAFF-005', district: 'Ludhiana' },
+  { roleKey: 'counsellor', username: 'counsellor_patiala@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Gurbaksh Singh', staffId: 'STAFF-006', district: 'Patiala' },
+  { roleKey: 'ddrc', username: 'ddrc_amritsar@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Harpreet Grewal', staffId: 'STAFF-007', district: 'Amritsar' },
+  { roleKey: 'ddrc', username: 'ddrc_jalandhar@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Balwinder Singh', staffId: 'STAFF-009', district: 'Jalandhar' },
+  { roleKey: 'ddrc', username: 'ddrc_ludhiana@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Simranjeet Kaur', staffId: 'STAFF-010', district: 'Ludhiana' },
+  { roleKey: 'ddrc', username: 'ddrc_patiala@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Gurdeep Singh', staffId: 'STAFF-011', district: 'Patiala' },
+  { roleKey: 'ditsu', username: 'ditsu@cbm.gov.in', password: 'CBM@DITSU24', name: 'Er. Navneet Sharma', staffId: 'STAFF-008' }
+];
+
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  const match = DEMO_CREDENTIALS.find(
+    c => c.username.toLowerCase() === username.trim().toLowerCase() &&
+         c.password === password.trim()
+  );
+  if (match) {
+    const token = signJWT({
+      username: match.username,
+      roleKey: match.roleKey,
+      name: match.name,
+      staffId: match.staffId,
+      district: match.district
+    });
+    return res.json({
+      token,
+      user: {
+        roleKey: match.roleKey,
+        name: match.name,
+        staffId: match.staffId,
+        district: match.district
+      }
+    });
+  }
+  return res.status(401).json({ error: 'Invalid username or password' });
+});
+
+app.post('/api/auth/patient-login', async (req, res) => {
+  const { patientId, name } = req.body;
+  if (!patientId) {
+    return res.status(400).json({ error: 'patientId is required' });
+  }
+  let patientName = name || 'Anonymous Patient';
+  try {
+    const patientObj = await Patient.findOne({ id: patientId });
+    if (patientObj) {
+      patientName = patientObj.name;
+    } else {
+      const newPt = new Patient({ id: patientId, name: patientName });
+      await newPt.save();
+    }
+  } catch (err) {
+    console.warn('[AUTH] Patient DB lookup failed, proceeding with fallback:', err.message);
+  }
+
+  const token = signJWT({
+    patientId: patientId,
+    roleKey: 'patient',
+    name: patientName
+  });
+  return res.json({ token, patientId, name: patientName });
+});
+
 // Connect to MongoDB
-const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/counselflow';
+const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/punjabvoice';
 mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => {
     console.error('❌ MongoDB Connection Error:', err);
@@ -121,15 +332,34 @@ mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(() => consol
 
 app.get('/api/patients', authenticateJWT, async (req, res) => {
   try {
-    const patients = await Patient.find({});
+    let query = {};
+    if (req.user && req.user.roleKey === 'counsellor') {
+      if (req.user.district) {
+        query = { district: req.user.district };
+      } else {
+        query = { id: '__nonexistent__' };
+      }
+    }
+    const patients = await Patient.find(query);
     res.json(patients);
   } catch (error) {
+    console.error("Error in GET /api/patients:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/patients/online', authenticateJWT, (req, res) => {
+  try {
+    const onlineIds = Object.keys(patientSockets);
+    res.json({ onlinePatientIds: onlineIds });
+  } catch (error) {
+    console.error("Error in GET /api/patients/online:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Seed endpoint: clears all patients and replaces with provided seed data
-app.post('/api/seed', async (req, res) => {
+app.post('/api/seed', authenticateJWT, async (req, res) => {
   try {
     const { patients } = req.body;
     if (!Array.isArray(patients)) {
@@ -356,18 +586,11 @@ app.post('/api/audit-trail', authenticateJWT, async (req, res) => {
 // ==========================================
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.post('/api/ai/chat/completions', async (req, res) => {
+app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
   try {
-    let apiKey = process.env.GROQ_API_KEY;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      const headerKey = req.headers.authorization.split(' ')[1];
-      if (headerKey && headerKey.trim() !== '') {
-        apiKey = headerKey;
-      }
-    }
-    
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured or provided" } });
+      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
     }
     
     const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', req.body, {
@@ -384,18 +607,11 @@ app.post('/api/ai/chat/completions', async (req, res) => {
   }
 });
 
-app.post('/api/ai/audio/transcriptions', upload.single('file'), async (req, res) => {
+app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
-    let apiKey = process.env.GROQ_API_KEY;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      const headerKey = req.headers.authorization.split(' ')[1];
-      if (headerKey && headerKey.trim() !== '') {
-        apiKey = headerKey;
-      }
-    }
-    
+    const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured or provided" } });
+      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
     }
     
     if (!req.file) {
@@ -428,19 +644,11 @@ app.post('/api/ai/audio/transcriptions', upload.single('file'), async (req, res)
 // GEMINI AI PROXY ENDPOINT
 // ==========================================
 
-app.post('/api/ai/gemini/chat', async (req, res) => {
+app.post('/api/ai/gemini/chat', authenticateJWT, async (req, res) => {
   try {
-    let apiKey = process.env.GEMINI_API_KEY;
-    // Allow frontend to pass the key via Authorization header
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      const headerKey = req.headers.authorization.split(' ')[1];
-      if (headerKey && headerKey.trim() !== '') {
-        apiKey = headerKey;
-      }
-    }
-
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured or provided" } });
+      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured on the server" } });
     }
 
     // Transform OpenAI-style messages to Gemini's contents format
@@ -540,8 +748,25 @@ io.on('connection', (socket) => {
   });
 
   // 2. Counselor initiates a call to a patient (sends WebRTC Offer)
-  socket.on('call-user', (data) => {
+  socket.on('call-user', async (data) => {
     // data = { to: 'patientId', offer: RTCSessionDescriptionInit, callerInfo: { name, avatar } }
+    const sender = connectedUsers[socket.id];
+    if (sender && sender.role === 'counselor') {
+      const counselorObj = DEMO_CREDENTIALS.find(c => c.username.toLowerCase() === sender.id.toLowerCase());
+      if (counselorObj && counselorObj.district) {
+        try {
+          const patientObj = await Patient.findOne({ id: data.to });
+          if (!patientObj || patientObj.district !== counselorObj.district) {
+            console.log(`❌ Call blocked: Counselor ${sender.id} (${counselorObj.district}) tried to call patient ${data.to} (${patientObj ? patientObj.district : 'No district'})`);
+            socket.emit('call-failed', { reason: 'district-mismatch' });
+            return;
+          }
+        } catch (dbErr) {
+          console.error('[SOCKET] Patient lookup failed during call validation:', dbErr);
+        }
+      }
+    }
+
     const targetSocket = patientSockets[data.to];
     if (targetSocket) {
       console.log(`📞 Counselor calling patient ${data.to}`);
@@ -549,6 +774,17 @@ io.on('connection', (socket) => {
         offer: data.offer,
         socket: socket.id,
         callerInfo: data.callerInfo || { name: 'Counselor' }
+      });
+
+      // Notify all counselor web dashboards that a call has started
+      Object.keys(connectedUsers).forEach(sid => {
+        const user = connectedUsers[sid];
+        if (user.role === 'counselor' && sid !== socket.id) {
+          io.to(sid).emit('counselor-call-started', {
+            patientId: data.to,
+            callerSocketId: socket.id
+          });
+        }
       });
     } else {
       console.log(`⚠️ Patient ${data.to} is not online.`);
@@ -563,6 +799,16 @@ io.on('connection', (socket) => {
     io.to(data.to).emit('answer-made', {
       socket: socket.id,
       answer: data.answer
+    });
+
+    // Notify all counselor web dashboards that the call connected
+    Object.keys(connectedUsers).forEach(sid => {
+      const user = connectedUsers[sid];
+      if (user.role === 'counselor' && sid !== data.to) {
+        io.to(sid).emit('counselor-call-connected', {
+          patientSocketId: socket.id
+        });
+      }
     });
   });
 
@@ -583,15 +829,36 @@ io.on('connection', (socket) => {
     io.to(data.to).emit('call-rejected', {
       socket: socket.id
     });
+
+    // Notify all counselor web dashboards that the call was rejected
+    Object.keys(connectedUsers).forEach(sid => {
+      const user = connectedUsers[sid];
+      if (user.role === 'counselor' && sid !== data.to) {
+        io.to(sid).emit('counselor-call-ended');
+      }
+    });
   });
 
   // 6. Either party ends the call
   socket.on('end-call', (data) => {
-    // data = { to: 'targetSocketId' }
-    if (data.to) {
-      console.log(`🛑 Call ended. Notifying ${data.to}`);
-      io.to(data.to).emit('call-ended');
+    // data = { to: 'targetSocketId', toPatientId: 'patientId' }
+    let target = data.to;
+    if (!target && data.toPatientId) {
+      target = patientSockets[data.toPatientId];
     }
+    if (target) {
+      console.log(`🛑 Call ended. Notifying ${target}`);
+      io.to(target).emit('call-ended');
+    }
+
+    // Notify all counselor web dashboards that the call ended
+    Object.keys(connectedUsers).forEach(sid => {
+      const user = connectedUsers[sid];
+      if (user.role === 'counselor' && sid !== socket.id && sid !== target) {
+        io.to(sid).emit('counselor-call-ended');
+      }
+    });
+
     // Cleanup relay pair if exists
     if (relayPairs[socket.id]) {
       delete relayPairs[relayPairs[socket.id]];
@@ -620,6 +887,21 @@ io.on('connection', (socket) => {
     if (data.to) {
       io.to(data.to).emit('transcript-update', { text: data.text, sender: data.sender });
     }
+
+    // Broadcast transcript-update to all counselor web dashboards
+    Object.keys(connectedUsers).forEach(sid => {
+      const user = connectedUsers[sid];
+      if (user.role === 'counselor' && sid !== socket.id && sid !== data.to) {
+        io.to(sid).emit('counselor-transcript-update', {
+          text: data.text,
+          sender: data.sender
+        });
+      }
+    });
+  });
+
+  socket.on('log-message', (data) => {
+    console.log(`[CLIENT LOG] [${data.level?.toUpperCase() || 'INFO'}] ${data.message}`);
   });
 
   // 8. Relay incoming audio chunk to the other party (binary data pass-through)
@@ -668,8 +950,17 @@ io.on('connection', (socket) => {
         delete counselorSockets[user.id];
       }
       delete connectedUsers[socket.id];
+
+      // Notify other counselors that a call might have ended due to disconnect
+      Object.keys(connectedUsers).forEach(sid => {
+        const otherUser = connectedUsers[sid];
+        if (otherUser.role === 'counselor' && sid !== socket.id) {
+          io.to(sid).emit('counselor-call-ended');
+        }
+      });
     }
   });
+
 });
 
 
