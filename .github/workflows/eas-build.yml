@@ -22,15 +22,12 @@ jobs:
           cache: 'npm'
           cache-dependency-path: patient-mobile-app/package-lock.json
 
-      - name: Setup Expo and EAS
-        uses: expo/expo-github-action@v8
-        with:
-          token: ${{ secrets.EXPO_TOKEN }}
-
       - name: Install Dependencies
         working-directory: ./patient-mobile-app
         run: npm ci
 
       - name: Build Android Preview APK
         working-directory: ./patient-mobile-app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx eas-cli build --platform android --profile preview --non-interactive
