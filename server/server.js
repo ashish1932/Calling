@@ -730,6 +730,9 @@ const counselorSockets = {}; // counselorId (or 'counselor') -> socketId
 // relayPairs[socketIdA] = socketIdB  and  relayPairs[socketIdB] = socketIdA
 const relayPairs = {};
 
+// Active call pairs: tracks bidirectional mapping between counselor and patient sockets
+const activeCallPairs = {};
+
 io.on('connection', (socket) => {
   console.log(`⚡ Socket connected: ${socket.id}`);
 
@@ -770,6 +773,11 @@ io.on('connection', (socket) => {
     const targetSocket = patientSockets[data.to];
     if (targetSocket) {
       console.log(`📞 Counselor calling patient ${data.to}`);
+      
+      // Store the active call mapping
+      activeCallPairs[socket.id] = targetSocket;
+      activeCallPairs[targetSocket] = socket.id;
+
       io.to(targetSocket).emit('call-made', {
         offer: data.offer,
         socket: socket.id,
@@ -826,6 +834,14 @@ io.on('connection', (socket) => {
   socket.on('reject-call', (data) => {
     // data = { to: 'counselorSocketId' }
     console.log(`❌ Patient rejected call from counselor ${data.to}`);
+    
+    // Cleanup active call pairing
+    const peer = activeCallPairs[socket.id] || data.to;
+    if (peer) {
+      delete activeCallPairs[peer];
+    }
+    delete activeCallPairs[socket.id];
+
     io.to(data.to).emit('call-rejected', {
       socket: socket.id
     });
@@ -846,9 +862,18 @@ io.on('connection', (socket) => {
     if (!target && data.toPatientId) {
       target = patientSockets[data.toPatientId];
     }
+    // Fallback lookup using activeCallPairs
+    if (!target || !connectedUsers[target]) {
+      target = activeCallPairs[socket.id];
+    }
+
     if (target) {
-      console.log(`🛑 Call ended. Notifying ${target}`);
+      console.log(`🛑 Call ended. Notifying peer ${target}`);
       io.to(target).emit('call-ended');
+      
+      // Cleanup active call pairing
+      delete activeCallPairs[target];
+      delete activeCallPairs[socket.id];
     }
 
     // Notify all counselor web dashboards that the call ended
@@ -936,6 +961,16 @@ io.on('connection', (socket) => {
   // Disconnect handler
   socket.on('disconnect', () => {
     console.log(`🔴 Socket disconnected: ${socket.id}`);
+    
+    // Automatically notify active peer if socket was in activeCallPairs
+    const peer = activeCallPairs[socket.id];
+    if (peer) {
+      console.log(`🔌 Active peer disconnected. Notifying peer ${peer}`);
+      io.to(peer).emit('call-ended');
+      delete activeCallPairs[peer];
+      delete activeCallPairs[socket.id];
+    }
+
     // Cleanup relay pair
     if (relayPairs[socket.id]) {
       io.to(relayPairs[socket.id]).emit('audio-relay-stop');

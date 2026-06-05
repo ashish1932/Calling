@@ -307,6 +307,61 @@ export default function App() {
         const currentLoopId = ++transcriptionLoopIdRef.current;
         recordingIntervalRef.current = true;
 
+        const processAudioChunk = async (uri, loopId) => {
+          try {
+            const formData = new FormData();
+            formData.append('file', {
+              uri: uri,
+              type: 'audio/m4a',
+              name: 'chunk.m4a',
+            });
+            formData.append('model', 'whisper-large-v3');
+            formData.append('temperature', '0');
+            formData.append('language', selectedLanguage);
+            formData.append('prompt', 'Counselor and patient are speaking about addiction recovery.');
+
+            const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
+              method: 'POST',
+              headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'ngrok-skip-browser-warning': '1',
+                'Authorization': mobileAuthToken ? `Bearer ${mobileAuthToken}` : ""
+              },
+              body: formData
+            });
+
+            if (response.ok) {
+              const resData = await response.json();
+              const text = resData.text;
+              
+              if (webrtcService.socket && webrtcService.socket.connected) {
+                webrtcService.socket.emit('log-message', {
+                  level: 'info',
+                  message: `[Mobile ASR] Successfully transcribed chunk: "${text?.trim()}"`
+                });
+              }
+
+              if (text && !isHallucination(text) && transcriptionLoopIdRef.current === loopId) {
+                const newTranscript = { sender: userRole, text: text.trim() };
+                setTranscripts(prev => [...prev, newTranscript]);
+
+                if (webrtcService.socket && webrtcService.socket.connected && webrtcService.counselorSocket) {
+                  webrtcService.socket.emit('transcript-update', {
+                    to: webrtcService.counselorSocket,
+                    text: text.trim(),
+                    sender: userRole
+                  });
+                }
+              }
+            } else {
+              const errText = await response.text();
+              logErrorToServer("Native ASR response not OK", new Error(`Status ${response.status}: ${errText.substring(0, 100)}`));
+            }
+          } catch (err) {
+            logErrorToServer("Native ASR process failed", err);
+          }
+        };
+
         const recordAndProcess = async () => {
           if (!recordingIntervalRef.current || transcriptionLoopIdRef.current !== currentLoopId) {
             return;
@@ -320,7 +375,8 @@ export default function App() {
             await currentRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
             await currentRecording.startAsync();
             
-            await new Promise(resolve => setTimeout(resolve, 4000));
+            // Wait for 3 seconds of recording (decreased from 4 seconds for lower latency)
+            await new Promise(resolve => setTimeout(resolve, 3000));
             
             if (!recordingIntervalRef.current || transcriptionLoopIdRef.current !== currentLoopId) {
               await currentRecording.stopAndUnloadAsync();
@@ -331,66 +387,24 @@ export default function App() {
             const uri = currentRecording.getURI();
             recordingRef.current = null;
 
-            if (uri && recordingIntervalRef.current && transcriptionLoopIdRef.current === currentLoopId) {
-              const formData = new FormData();
-              formData.append('file', {
-                uri: uri,
-                type: 'audio/m4a',
-                name: 'chunk.m4a',
-              });
-              formData.append('model', 'whisper-large-v3');
-              formData.append('temperature', '0');
-              formData.append('language', selectedLanguage);
-              formData.append('prompt', 'Counselor and patient are speaking about addiction recovery.');
+            // Start the next recording immediately to prevent audio capture gaps
+            if (recordingIntervalRef.current && transcriptionLoopIdRef.current === currentLoopId) {
+              recordAndProcess();
+            }
 
-              const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
-                method: 'POST',
-                headers: {
-                  'X-Requested-With': 'XMLHttpRequest',
-                  'ngrok-skip-browser-warning': '1',
-                  'Authorization': mobileAuthToken ? `Bearer ${mobileAuthToken}` : ""
-                },
-                body: formData
-              });
-
-              if (response.ok) {
-                const resData = await response.json();
-                const text = resData.text;
-                
-                // Log successful transcription text to server logs for verification
-                if (webrtcService.socket && webrtcService.socket.connected) {
-                  webrtcService.socket.emit('log-message', {
-                    level: 'info',
-                    message: `[Mobile ASR] Successfully transcribed chunk: "${text?.trim()}"`
-                  });
-                }
-
-                if (text && !isHallucination(text) && transcriptionLoopIdRef.current === currentLoopId) {
-                  const newTranscript = { sender: userRole, text: text.trim() };
-                  setTranscripts(prev => [...prev, newTranscript]);
-
-                  if (webrtcService.socket && webrtcService.socket.connected && webrtcService.counselorSocket) {
-                    webrtcService.socket.emit('transcript-update', {
-                      to: webrtcService.counselorSocket,
-                      text: text.trim(),
-                      sender: userRole
-                    });
-                  }
-                }
-              } else {
-                const errText = await response.text();
-                logErrorToServer("Native transcription response not OK", new Error(`Status ${response.status}: ${errText.substring(0, 100)}`));
-              }
+            // Transcribe the completed chunk asynchronously
+            if (uri && transcriptionLoopIdRef.current === currentLoopId) {
+              processAudioChunk(uri, currentLoopId);
             }
           } catch (err) {
-            logErrorToServer("Native transcription chunk", err);
+            logErrorToServer("Native recording chunk failed", err);
             if (currentRecording) {
               try { await currentRecording.stopAndUnloadAsync(); } catch (e) {}
             }
-          }
-
-          if (recordingIntervalRef.current && transcriptionLoopIdRef.current === currentLoopId) {
-            recordAndProcess();
+            // If failed, wait 1s before retrying to prevent rapid error loops
+            if (recordingIntervalRef.current && transcriptionLoopIdRef.current === currentLoopId) {
+              setTimeout(recordAndProcess, 1000);
+            }
           }
         };
 
