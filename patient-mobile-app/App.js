@@ -250,6 +250,11 @@ export default function App() {
                 body: formData
               });
               
+              if (response.status === 401) {
+                handleSessionExpired();
+                return;
+              }
+
               if (response.ok) {
                 const resData = await response.json();
                 const text = resData.text;
@@ -307,7 +312,33 @@ export default function App() {
         const currentLoopId = ++transcriptionLoopIdRef.current;
         recordingIntervalRef.current = true;
 
-        const processAudioChunk = async (uri, loopId) => {
+        const ASR_AUDIO_OPTIONS = {
+          isMeteringEnabled: true,
+          android: {
+            extension: '.m4a',
+            outputFormat: 2, // MPEG_4
+            audioEncoder: 3, // AAC
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 12800,
+          },
+          ios: {
+            extension: '.m4a',
+            outputFormat: 'm4af',
+            audioQuality: 64, // LOW
+            sampleRate: 16000,
+            numberOfChannels: 1,
+            bitRate: 12800,
+          },
+        };
+
+        const processAudioChunk = async (uri, loopId, maxDb) => {
+          // Skip silent chunks to save API costs & requests (threshold: -45 dB)
+          if (maxDb > -160 && maxDb < -45) {
+            console.log(`[Mobile ASR] Skipping silent chunk (max volume: ${maxDb} dB)`);
+            return;
+          }
+
           try {
             const formData = new FormData();
             formData.append('file', {
@@ -329,6 +360,11 @@ export default function App() {
               },
               body: formData
             });
+
+            if (response.status === 401) {
+              handleSessionExpired();
+              return;
+            }
 
             if (response.ok) {
               const resData = await response.json();
@@ -372,7 +408,16 @@ export default function App() {
             currentRecording = new Audio.Recording();
             recordingRef.current = currentRecording;
             
-            await currentRecording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+            await currentRecording.prepareToRecordAsync(ASR_AUDIO_OPTIONS);
+            
+            // Monitor metering/volume status
+            let maxDb = -160;
+            currentRecording.setOnRecordingStatusUpdate((status) => {
+              if (status && status.metering !== undefined) {
+                maxDb = Math.max(maxDb, status.metering);
+              }
+            });
+
             await currentRecording.startAsync();
             
             // Wait for 3 seconds of recording (decreased from 4 seconds for lower latency)
@@ -394,7 +439,7 @@ export default function App() {
 
             // Transcribe the completed chunk asynchronously
             if (uri && transcriptionLoopIdRef.current === currentLoopId) {
-              processAudioChunk(uri, currentLoopId);
+              processAudioChunk(uri, currentLoopId, maxDb);
             }
           } catch (err) {
             logErrorToServer("Native recording chunk failed", err);
@@ -584,6 +629,14 @@ export default function App() {
     } catch (err) {}
   };
 
+  const handleSessionExpired = () => {
+    mobileAuthToken = '';
+    webrtcService.cleanupCall();
+    setUiState('login');
+    setTranscripts([]);
+    alert('Session expired. Please log in again.');
+  };
+
   const fetchPatients = async () => {
     setIsLoadingPatients(true);
     try {
@@ -595,6 +648,10 @@ export default function App() {
           'Authorization': mobileAuthToken ? `Bearer ${mobileAuthToken}` : ""
         }
       });
+      if (response.status === 401) {
+        handleSessionExpired();
+        return;
+      }
       if (response.ok) {
         const data = await response.json();
         setPatients(data);
