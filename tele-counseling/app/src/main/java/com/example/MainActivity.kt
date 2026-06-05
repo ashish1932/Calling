@@ -123,7 +123,7 @@ fun MainScreen(viewModel: CallViewModel) {
                                 serverUrl = serverUrl,
                                 patientId = patientId,
                                 onServerUrlChange = { viewModel.updateServerUrl(it) },
-                                onpatientIdChange = { viewModel.updatepatientId(it) },
+                                onpatientIdChange = { viewModel.updatePatientId(it) },
                                 onConnectClick = { viewModel.connect() }
                             )
                         }
@@ -375,7 +375,7 @@ fun PatientDashboardView(patientId: String, onLogout: () -> Unit) {
             shape = RoundedCornerShape(16.dp)
         ) {
             Text(
-                ""One day at a time. You are stronger than you think."",
+                "One day at a time. You are stronger than you think.",
                 color = Color(0xFFC7D2FE),
                 fontSize = 15.sp,
                 fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
