@@ -63,7 +63,7 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(viewModel: CallViewModel) {
     val callState by viewModel.callState.collectAsState()
     val serverUrl by viewModel.serverUrl.collectAsState()
-    val counselorId by viewModel.counselorId.collectAsState()
+    val patientId by viewModel.patientId.collectAsState()
     val callerName by viewModel.callerName.collectAsState()
     val durationSeconds by viewModel.durationSeconds.collectAsState()
 
@@ -121,9 +121,9 @@ fun MainScreen(viewModel: CallViewModel) {
                         CallState.IDLE -> {
                             ConfigurationView(
                                 serverUrl = serverUrl,
-                                counselorId = counselorId,
+                                patientId = patientId,
                                 onServerUrlChange = { viewModel.updateServerUrl(it) },
-                                onCounselorIdChange = { viewModel.updateCounselorId(it) },
+                                onpatientIdChange = { viewModel.updatepatientId(it) },
                                 onConnectClick = { viewModel.connect() }
                             )
                         }
@@ -134,7 +134,7 @@ fun MainScreen(viewModel: CallViewModel) {
 
                         CallState.WAITING -> {
                             PatientDashboardView(
-                                patientId = counselorId, // using counselorId state var for patient ID
+                                patientId = patientId, // using patientId state var for patient ID
                                 onLogout = { viewModel.disconnect() }
                             )
                         }
@@ -175,9 +175,9 @@ fun MainScreen(viewModel: CallViewModel) {
 @Composable
 fun ConfigurationView(
     serverUrl: String,
-    counselorId: String,
+    patientId: String,
     onServerUrlChange: (String) -> Unit,
-    onCounselorIdChange: (String) -> Unit,
+    onpatientIdChange: (String) -> Unit,
     onConnectClick: () -> Unit
 ) {
     Card(
@@ -195,8 +195,8 @@ fun ConfigurationView(
             Text("Patient Sign In", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(24.dp))
             OutlinedTextField(
-                value = counselorId,
-                onValueChange = onCounselorIdChange,
+                value = patientId,
+                onValueChange = onpatientIdChange,
                 placeholder = { Text("Enter Patient ID", color = Color(0xFF475569)) },
                 modifier = Modifier.fillMaxWidth(),
                 colors = OutlinedTextFieldDefaults.colors(
