@@ -147,6 +147,47 @@ class CallManager {
         this.patientSocketId = null;
         this.endCall();
       });
+
+      this.socket.on('dashboard-observe-call', async (data) => {
+        if (!this.room && data.roomName) {
+            console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
+            try {
+                const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                const resp = await fetch('/api/livekit/token', {
+                    method: 'POST',
+                    headers: { 
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                      'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                });
+                const tokenData = await resp.json();
+                if (tokenData.token && window.LivekitClient) {
+                    this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                    this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                        if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                            const element = track.attach();
+                            document.body.appendChild(element);
+                            if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                            
+                            const stream = new MediaStream([track.mediaStreamTrack]);
+                            const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                            if (speakerName === "Counselor") {
+                                this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
+                            } else {
+                                this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
+                            }
+                        }
+                    });
+                    await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                    window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                }
+            } catch (err) {
+                console.error('[LiveKit] Failed to observe call:', err);
+            }
+        }
+      });
     } else {
       console.warn("Socket.io is not loaded.");
     }

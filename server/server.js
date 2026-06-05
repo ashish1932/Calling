@@ -42,6 +42,7 @@ const authenticateJWT = (req, res, next) => {
 };
 
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy (ngrok) for rate limiting
 
 // Security middleware to block sensitive files
 app.use((req, res, next) => {
@@ -165,6 +166,7 @@ app.get('/api/patients', authenticateJWT, async (req, res) => {
 // ==========================================
 
 app.post('/api/login', async (req, res) => {
+  console.log('[DEBUG] Incoming login request:', req.body, req.headers);
   try {
     const { id, role } = req.body;
     if (!id || !role) {
@@ -697,6 +699,14 @@ io.on('connection', (socket) => {
         socket: socket.id,
         callerInfo: data.callerInfo || { name: 'Counselor' }
       });
+      // Broadcast to all connected clients so dashboards can join LiveKit to transcribe
+      if (data.offer && (data.offer.roomName || data.offer.sdp)) {
+        io.emit('dashboard-observe-call', {
+            roomName: data.offer.roomName || data.offer.sdp,
+            patientId: data.to,
+            counselorId: connectedUsers[socket.id] ? connectedUsers[socket.id].id : 'Unknown'
+        });
+      }
     } else {
       console.log(`⚠️ Patient ${data.to} is not online.`);
       socket.emit('call-failed', { reason: 'patient-offline' });
@@ -899,6 +909,15 @@ app.post('/api/livekit/notify-call', authenticateJWT, async (req, res) => {
     console.error('Error sending push notification:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Global Error Handler to prevent crashes from bad JSON payloads
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('Bad JSON Payload caught:', err.message);
+    return res.status(400).send({ error: 'Invalid JSON payload sent.' });
+  }
+  next();
 });
 
 // ==========================================
