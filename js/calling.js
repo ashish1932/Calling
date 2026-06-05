@@ -165,6 +165,11 @@ class CallManager {
                 });
                 const tokenData = await resp.json();
                 if (tokenData.token && window.LivekitClient) {
+                    this.isActive = true;
+                    this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
+                    window.CounselFlow.appController.switchScreen('call-console');
+                    this.startTimer();
+                    
                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                         if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
