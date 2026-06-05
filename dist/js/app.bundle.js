@@ -1694,8 +1694,11 @@ The JSON object must have EXACTLY these fields:
       // Groq Whisper supports flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
       formData.append("file", audioBlob, "chunk.webm");
       formData.append("model", "whisper-large-v3-turbo");
-      // Do NOT force a language hint — let Whisper auto-detect
-      // Forcing 'pa' or 'hi' causes hallucinations in silence
+      // Force language to prevent hallucinations in other languages (like Hungarian or Spanish)
+      let whisperLang = 'en';
+      if (languageCode.startsWith('hi')) whisperLang = 'hi';
+      else if (languageCode.startsWith('pa')) whisperLang = 'pa';
+      formData.append("language", whisperLang);
       formData.append("response_format", "json");
       // Ask Whisper to not transcribe if the audio is likely silence
       // (Removed hardcoded prompt and temperature per user request)
@@ -5200,11 +5203,6 @@ class AppController {
             </div>
           </div>
           <div>
-            ${roleConfig.allowedScreens.includes('call-console') ? `
-            <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="background: var(--accent-red); font-size:12px; padding: 8px 16px;">
-               Call Back Now
-            </button>
-            ` : ''}
           </div>
         </div>
       `;
@@ -5233,11 +5231,6 @@ class AppController {
                   </div>
                 </div>
                 <div>
-                  ${roleConfig.allowedScreens.includes('call-console') ? `
-                  <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="background: var(--accent-orange); font-size:12px; padding: 8px 16px; border:none;">
-                     Call Now
-                  </button>
-                  ` : ''}
                 </div>
               </div>
             `;
@@ -5572,10 +5565,7 @@ class AppController {
             `<span style="font-size:10px; padding:4px 8px; border-radius:12px; background:rgba(16,185,129,0.1); color:var(--accent-teal); border:1px solid var(--accent-teal);"> Consent Given</span>`
           }
         </div>
-        ${roleConfig.allowedScreens.includes('call-console') ? `
-        <div style="width:80px; flex-shrink:0; display:flex; align-items:center; justify-content:center;" role="cell">
-          <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="font-size:12px; padding:8px 16px;" aria-label="Call ${escapedName}"> Call</button>
-        </div>` : '<div style="width:80px; flex-shrink:0;" role="cell"></div>'}
+        <div style="width:80px; flex-shrink:0;" role="cell"></div>
       </div>
     `;
   }

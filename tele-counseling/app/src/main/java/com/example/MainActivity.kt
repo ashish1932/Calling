@@ -275,7 +275,7 @@ fun ConfigurationView(
             OutlinedTextField(
                 value = patientId,
                 onValueChange = onPatientIdChange,
-                placeholder = { Text("e.g. PT-001", color = Color(0xFF475569)) },
+                placeholder = { Text("Enter Patient ID", color = Color(0xFF475569)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -577,7 +577,7 @@ fun WaitingForCallsView(
                     modifier = Modifier.size(20.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Call Counselor", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Bold)
+                Text("Call Your Counselor", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(12.dp))

@@ -13,6 +13,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import java.io.IOException
 
 enum class CallState {
     IDLE,          // Initial configuration screen
@@ -33,7 +38,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
     private val _patientId = MutableStateFlow(
-        prefs.getString("patientId", "PT-001") ?: "PT-001"
+        prefs.getString("patientId", "") ?: ""
     )
     val patientId: StateFlow<String> = _patientId.asStateFlow()
 
@@ -51,6 +56,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private var signalingClient: SignalingClient? = null
     private var webRTCManager: WebRTCManager? = null
+
+    private val httpClient = OkHttpClient()
 
     // Temp variables for the incoming call
     private var savedCallerId: String? = null
@@ -92,17 +99,59 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Save preferences to remain logged in
-        prefs.edit()
-            .putString("serverUrl", _serverUrl.value)
-            .putString("patientId", _patientId.value)
-            .putBoolean("isLoggedIn", true)
-            .apply()
-
         _callState.value = CallState.CONNECTING
-        addLog("Connecting to signaling server at ${_serverUrl.value}...")
+        addLog("Validating login for Patient ${_patientId.value}...")
 
-        // Instantiate Signaling Client
+        val loginData = JSONObject().apply {
+            put("id", _patientId.value)
+            put("role", "patient")
+        }
+        val requestBody = loginData.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url("${_serverUrl.value}/api/login")
+            .post(requestBody)
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                viewModelScope.launch {
+                    addLog("Login failed: Network error - ${e.localizedMessage}")
+                    _callState.value = CallState.ERROR
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                viewModelScope.launch {
+                    if (response.isSuccessful) {
+                        val respStr = response.body?.string() ?: ""
+                        try {
+                            val json = JSONObject(respStr)
+                            val name = json.optString("name", _patientId.value)
+                            addLog("Login successful! Welcome, $name.")
+                            
+                            // Save preferences
+                            prefs.edit()
+                                .putString("serverUrl", _serverUrl.value)
+                                .putString("patientId", _patientId.value)
+                                .putBoolean("isLoggedIn", true)
+                                .apply()
+
+                            connectSignaling()
+                        } catch (e: Exception) {
+                            addLog("Error parsing login response.")
+                            _callState.value = CallState.ERROR
+                        }
+                    } else {
+                        addLog("Login failed: Invalid credentials or not a patient.")
+                        _callState.value = CallState.ERROR
+                    }
+                }
+            }
+        })
+    }
+
+    private fun connectSignaling() {
+        addLog("Connecting to signaling server at ${_serverUrl.value}...")
         signalingClient = SignalingClient(
             backendUrl = _serverUrl.value,
             patientId = _patientId.value,
@@ -141,7 +190,6 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         )
-
         signalingClient?.connect()
     }
 
@@ -250,7 +298,12 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         // Clear persistent login flag so user must sign in manually next time
-        prefs.edit().putBoolean("isLoggedIn", false).apply()
+        prefs.edit()
+            .putBoolean("isLoggedIn", false)
+            .remove("patientId")
+            .apply()
+
+        _patientId.value = ""
 
         timerJob?.cancel()
         timerJob = null

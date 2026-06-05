@@ -13,6 +13,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
 
 enum class CallState {
     IDLE,          // Initial configuration screen
@@ -33,7 +39,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
     private val _counselorId = MutableStateFlow(
-        prefs.getString("counselorId", "CO-101") ?: "CO-101"
+        prefs.getString("counselorId", "") ?: ""
     )
     val counselorId: StateFlow<String> = _counselorId.asStateFlow()
 
@@ -51,6 +57,11 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private var signalingClient: SignalingClient? = null
     private var webRTCManager: WebRTCManager? = null
+
+    private val _patients = MutableStateFlow<List<PatientData>>(emptyList())
+    val patients: StateFlow<List<PatientData>> = _patients.asStateFlow()
+
+    private val httpClient = OkHttpClient()
 
     // Temp variables for the incoming call
     private var savedCallerId: String? = null
@@ -92,17 +103,105 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Save preferences to remain logged in
-        prefs.edit()
-            .putString("serverUrl", _serverUrl.value)
-            .putString("counselorId", _counselorId.value)
-            .putBoolean("isLoggedIn", true)
-            .apply()
-
         _callState.value = CallState.CONNECTING
-        addLog("Connecting to signaling server at ${_serverUrl.value}...")
+        addLog("Validating login for Counselor ${_counselorId.value}...")
 
-        // Instantiate Signaling Client
+        val loginData = JSONObject().apply {
+            put("id", _counselorId.value)
+            put("role", "counselor")
+        }
+        val requestBody = loginData.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url("${_serverUrl.value}/api/login")
+            .post(requestBody)
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                viewModelScope.launch {
+                    addLog("Login failed: Network error - ${e.localizedMessage}")
+                    _callState.value = CallState.ERROR
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                viewModelScope.launch {
+                    if (response.isSuccessful) {
+                        val respStr = response.body?.string() ?: ""
+                        try {
+                            val json = JSONObject(respStr)
+                            val name = json.optString("name", _counselorId.value)
+                            addLog("Login successful! Welcome, $name.")
+                            
+                            // Save preferences
+                            prefs.edit()
+                                .putString("serverUrl", _serverUrl.value)
+                                .putString("counselorId", _counselorId.value)
+                                .putBoolean("isLoggedIn", true)
+                                .apply()
+
+                            fetchAssignedPatients()
+                            connectSignaling()
+                        } catch (e: Exception) {
+                            addLog("Error parsing login response.")
+                            _callState.value = CallState.ERROR
+                        }
+                    } else {
+                        addLog("Login failed: Invalid credentials or not a counselor.")
+                        _callState.value = CallState.ERROR
+                    }
+                }
+            }
+        })
+    }
+
+    private fun fetchAssignedPatients() {
+        addLog("Fetching assigned patients...")
+        val request = Request.Builder()
+            .url("${_serverUrl.value}/api/counselors/${_counselorId.value}/patients")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                viewModelScope.launch { addLog("Failed to fetch patients: ${e.localizedMessage}") }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                viewModelScope.launch {
+                    if (response.isSuccessful) {
+                        val respStr = response.body?.string() ?: "[]"
+                        try {
+                            val jsonArray = JSONArray(respStr)
+                            val parsedList = mutableListOf<PatientData>()
+                            for (i in 0 until jsonArray.length()) {
+                                val ptObj = jsonArray.getJSONObject(i)
+                                parsedList.add(
+                                    PatientData(
+                                        id = ptObj.optString("id", ""),
+                                        name = ptObj.optString("name", "Unknown"),
+                                        status = ptObj.optString("status", null),
+                                        severity = ptObj.optString("severity", null),
+                                        avatarColor = ptObj.optString("avatarColor", null),
+                                        progress = ptObj.optInt("progress", 0)
+                                    )
+                                )
+                            }
+                            _patients.value = parsedList
+                            addLog("Loaded ${parsedList.size} assigned patients.")
+                        } catch (e: Exception) {
+                            addLog("Error parsing patients: ${e.localizedMessage}")
+                        }
+                    } else {
+                        addLog("Failed to load patients list from server.")
+                    }
+                }
+            }
+        })
+    }
+
+    private fun connectSignaling() {
+        addLog("Connecting to signaling server at ${_serverUrl.value}...")
         signalingClient = SignalingClient(
             backendUrl = _serverUrl.value,
             counselorId = _counselorId.value,
@@ -119,7 +218,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 override fun onOfferReceived(from: String, offerSdp: String, callerName: String) {
-                    addLog("Signaling: Incoming offer received from counselor '$callerName' (socket ID: $from).")
+                    addLog("Signaling: Incoming offer received from patient '$callerName' (socket ID: $from).")
                     savedCallerId = from
                     savedOfferSdp = offerSdp
                     _callerName.value = callerName
@@ -132,7 +231,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 override fun onHangupReceived() {
-                    addLog("Signaling: Counselor hung up the call.")
+                    addLog("Signaling: Patient hung up the call.")
                     hangupLocally()
                 }
 
@@ -141,7 +240,6 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         )
-
         signalingClient?.connect()
     }
 
@@ -251,7 +349,12 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     fun disconnect() {
         // Clear persistent login flag so user must sign in manually next time
-        prefs.edit().putBoolean("isLoggedIn", false).apply()
+        prefs.edit()
+            .putBoolean("isLoggedIn", false)
+            .remove("counselorId")
+            .apply()
+            
+        _counselorId.value = ""
 
         timerJob?.cancel()
         timerJob = null

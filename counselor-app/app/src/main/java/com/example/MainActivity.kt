@@ -263,7 +263,7 @@ fun ConfigurationView(
 
             // Patient ID Input - The primary configuration element
             Text(
-                text = "PATIENT ACCOUNT ID",
+                text = "COUNSELOR ACCOUNT ID",
                 color = Color(0xFF2DD4BF),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
@@ -275,7 +275,7 @@ fun ConfigurationView(
             OutlinedTextField(
                 value = counselorId,
                 onValueChange = onCounselorIdChange,
-                placeholder = { Text("e.g. CO-101", color = Color(0xFF475569)) },
+                placeholder = { Text("Enter Counselor ID", color = Color(0xFF475569)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -563,21 +563,53 @@ fun WaitingForCallsView(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            Button(
-                onClick = { viewModel?.startCall("PT-001") ?: Unit },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Call,
-                    contentDescription = "Call",
-                    modifier = Modifier.size(20.dp)
+            val patients by viewModel?.patients?.collectAsState(initial = emptyList()) ?: mutableStateOf(emptyList())
+
+            if (patients.isEmpty()) {
+                Text(
+                    text = "No assigned patients found.",
+                    color = Color(0xFF64748B),
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 16.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Call Patient (PT-001)", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Bold)
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 250.dp)
+                ) {
+                    items(patients) { patient ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .background(Color(0xFF0F172A).copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(patient.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                                Text("${patient.id} • ${patient.status ?: "Unknown"} • ${patient.severity ?: "Unknown"} Severity", color = Color(0xFF94A3B8), fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = { viewModel?.startCall(patient.id) ?: Unit },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488)),
+                                modifier = Modifier.height(36.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Call,
+                                    contentDescription = "Call ${patient.name}",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Call", fontSize = 12.sp, color = Color.White)
+                            }
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))

@@ -1459,11 +1459,6 @@ class AppController {
             </div>
           </div>
           <div>
-            ${roleConfig.allowedScreens.includes('call-console') ? `
-            <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="background: var(--accent-red); font-size:12px; padding: 8px 16px;">
-               Call Back Now
-            </button>
-            ` : ''}
           </div>
         </div>
       `;
@@ -1494,11 +1489,6 @@ class AppController {
                   </div>
                 </div>
                 <div>
-                  ${roleConfig.allowedScreens.includes('call-console') ? `
-                  <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="background: var(--accent-orange); font-size:12px; padding: 8px 16px; border:none;">
-                     Call Now
-                  </button>
-                  ` : ''}
                 </div>
               </div>
             `;
@@ -1836,10 +1826,7 @@ class AppController {
             `<span style="font-size:10px; padding:4px 8px; border-radius:12px; background:rgba(16,185,129,0.1); color:var(--accent-teal); border:1px solid var(--accent-teal);"> Consent Given</span>`
           }
         </div>
-        ${roleConfig.allowedScreens.includes('call-console') ? `
-        <div style="width:80px; flex-shrink:0; display:flex; align-items:center; justify-content:center;" role="cell">
-          <button class="btn-primary btn-call-trigger" data-patient-id="${escapedId}" style="font-size:12px; padding:8px 16px;" aria-label="Call ${escapedName}"> Call</button>
-        </div>` : '<div style="width:80px; flex-shrink:0;" role="cell"></div>'}
+        <div style="width:80px; flex-shrink:0;" role="cell"></div>
       </div>
     `;
   }

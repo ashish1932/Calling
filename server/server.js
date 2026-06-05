@@ -160,6 +160,38 @@ app.get('/api/patients', authenticateJWT, async (req, res) => {
   }
 });
 
+// ==========================================
+// AUTHENTICATION API
+// ==========================================
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { id, role } = req.body;
+    if (!id || !role) {
+      return res.status(400).json({ error: 'Missing id or role' });
+    }
+
+    if (role === 'counselor') {
+      const counselor = await Counselor.findOne({ id });
+      if (counselor) {
+        return res.json({ success: true, name: counselor.name || id, role: 'counselor' });
+      }
+    } else if (role === 'patient') {
+      const patient = await Patient.findOne({ id });
+      if (patient) {
+        return res.json({ success: true, name: patient.name || id, role: 'patient' });
+      }
+    } else {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    return res.status(401).json({ error: 'Invalid credentials. User not found.' });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Seed endpoint: clears all patients and replaces with provided seed data
 app.post('/api/seed', async (req, res) => {
   try {
@@ -247,6 +279,22 @@ app.get('/api/counselors', authenticateJWT, async (req, res) => {
   try {
     const counselors = await Counselor.find({});
     res.json(counselors);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/counselors/:id/patients', authenticateJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Find patients where counselorId or assignedCounselor matches the given ID
+    const patients = await Patient.find({
+      $or: [
+        { counselorId: id },
+        { assignedCounselor: id }
+      ]
+    });
+    res.json(patients);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
