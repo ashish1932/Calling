@@ -11,6 +11,7 @@ class CallManager {
     this.isHeld = false; // UX #47: Hold state toggle
     this.duration = 0;
     this.timerInterval = null;
+    this.whisperQueue = Promise.resolve(); // Issue 2: Initialize whisperQueue
     this.canvas = null;
     this.ctx = null;
     this.animationFrame = null;
@@ -324,10 +325,11 @@ class CallManager {
     
     const recorder = new MediaRecorder(stream, options);
     recorder.ondataavailable = async (event) => {
-      if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-        this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
-          const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-          if (transcript && this.isActive) {
+      try {
+        if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+          this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+            const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+            if (transcript && this.isActive) {
 
             //  Hallucination Guard 
             const isHallucination = (text) => {
@@ -357,13 +359,18 @@ class CallManager {
               console.debug('[ASR] Filtered hallucination:', transcript);
               return;
             }
-            // 
-
-            this.addTranscriptLine(speaker, transcript);
-
-          }
-        }).catch(e => console.error("Whisper transcription error:", e));
+            //              this.addTranscriptLine(speaker, t, null, isHallucination(t));
+            }
+          });
+        }
+      } catch (err) {
+        console.error(`[MediaRecorder] Error processing chunk for ${speaker}:`, err);
       }
+    };
+    
+    // Explicit error handler for recorder
+    recorder.onerror = (e) => {
+      console.error(`[MediaRecorder] Error for ${speaker}:`, e.error);
     };
 
     recorder.start();
@@ -380,6 +387,21 @@ class CallManager {
     }, 4000);
     
     return recorder;
+  }
+
+  // Issue 1: Missing startInteractiveDemo Method
+  startInteractiveDemo() {
+    console.log("[CallManager] Starting interactive demo...");
+    const demoPatient = {
+      id: "DEMO-001",
+      name: "Interactive Demo Patient",
+      severity: "Medium",
+      status: "Active",
+      phone: "+91-0000000000",
+      addictionCategory: "Opioid (Heroin)"
+    };
+    window.CounselFlow.appController.switchScreen('call-console');
+    this.startCall(demoPatient);
   }
 
   // Live Transcription is now triggered directly by LiveKit track subscriptions
@@ -796,6 +818,7 @@ class CallManager {
       const secs = (this.duration % 60).toString().padStart(2, '0');
       
       document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
+      document.getElementById('patient-cravings').innerText = `${this.activePatient.cravingsIntensity || 0}/10`;
     }, 1000);
 
     // In the new App-to-App LiveKit architecture, the Dashboard acts as an observer.
@@ -822,8 +845,14 @@ class CallManager {
     // Log call attempt (Connected) (Phase 2, Solution Scope #2)
     this.logCallAttempt(this.activePatient, this.duration, this.callDirection || "Outbound", "Connected");
 
-    // Copy active transcript to cache and clear (Bug #2)
-    this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript));
+    // Finalize transcripts and push to AI for summarization
+    try {
+      this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript || []));
+    } catch (e) {
+      console.warn("Failed to deep copy transcript, resetting to empty array", e);
+      this.lastSessionTranscript = [];
+    }
+    
     this.#currentTranscript = [];
     
     this.isActive = false;

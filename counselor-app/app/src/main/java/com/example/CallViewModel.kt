@@ -292,7 +292,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startCall(targetId: String) {
-        val roomName = "room-${java.util.UUID.randomUUID().toString().substring(0, 8)}"
+        val roomName = "counselflow-room-${targetId.ifBlank { java.util.UUID.randomUUID().toString().substring(0, 8) }}"
         val myName = _counselorId.value.ifBlank { "Counselor" }
         addLog("LiveKit: Initiating call to $targetId in room $roomName")
 

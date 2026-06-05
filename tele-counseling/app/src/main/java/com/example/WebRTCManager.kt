@@ -78,6 +78,7 @@ class WebRTCManager(
                     
                     val resJson = JSONObject(response.body?.string() ?: "{}")
                     val token = resJson.optString("token")
+                    val livekitUrl = resJson.optString("url", "wss://ai-assistant-ommd272n.livekit.cloud")
                     if (token.isBlank()) {
                         withContext(Dispatchers.Main) { listener.onError("Token is empty") }
                         return@launch
@@ -97,7 +98,7 @@ class WebRTCManager(
                         
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                room?.connect("wss://ai-assistant-ommd272n.livekit.cloud", token)
+                                room?.connect(livekitUrl, token)
                                 withContext(Dispatchers.Main) {
                                     listener.onWebRTCLog("LiveKit: Connected to room!")
                                     

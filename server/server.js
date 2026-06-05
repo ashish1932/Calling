@@ -872,7 +872,10 @@ app.post('/api/livekit/token', authenticateJWT, async (req, res) => {
     at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
 
     const jwtToken = await at.toJwt();
-    res.json({ token: jwtToken });
+    res.json({ 
+      token: jwtToken,
+      url: process.env.LIVEKIT_URL || 'wss://ai-assistant-ommd272n.livekit.cloud'
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
