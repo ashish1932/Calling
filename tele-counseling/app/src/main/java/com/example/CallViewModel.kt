@@ -16,6 +16,7 @@ import java.util.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
@@ -37,10 +38,15 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     )
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
-    private val _patientId = MutableStateFlow(
-        prefs.getString("patientId", "") ?: ""
+    private val _userId = MutableStateFlow(
+        prefs.getString("userId", "") ?: ""
     )
-    val patientId: StateFlow<String> = _patientId.asStateFlow()
+    val userId: StateFlow<String> = _userId.asStateFlow()
+
+    private val _userRole = MutableStateFlow(
+        prefs.getString("userRole", "") ?: ""
+    )
+    val userRole: StateFlow<String> = _userRole.asStateFlow()
 
     private val _callState = MutableStateFlow(CallState.IDLE)
     val callState: StateFlow<CallState> = _callState.asStateFlow()
@@ -56,6 +62,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private var signalingClient: SignalingClient? = null
     private var webRTCManager: WebRTCManager? = null
+
+    private val _patients = MutableStateFlow<List<PatientData>>(emptyList())
+    val patients: StateFlow<List<PatientData>> = _patients.asStateFlow()
 
     private val httpClient = OkHttpClient()
 
@@ -78,8 +87,12 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         _serverUrl.value = url
     }
 
-    fun updatePatientId(id: String) {
-        _patientId.value = id
+    fun updateUserId(id: String) {
+        _userId.value = id
+    }
+
+    fun updateUserRole(role: String) {
+        _userRole.value = role
     }
 
     fun clearLogs() {
@@ -94,20 +107,20 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun connect() {
-        if (_serverUrl.value.isBlank() || _patientId.value.isBlank()) {
-            addLog("Error: Server URL and Patient ID cannot be empty.")
+        if (_serverUrl.value.isBlank() || _userId.value.isBlank() || _userRole.value.isBlank()) {
+            addLog("Error: Server URL, User ID, and Role cannot be empty.")
             return
         }
 
-        val patientIdTrimmed = _patientId.value.trim()
-        _patientId.value = patientIdTrimmed
+        val userIdTrimmed = _userId.value.trim()
+        _userId.value = userIdTrimmed
 
         _callState.value = CallState.CONNECTING
-        addLog("Validating login for Patient $patientIdTrimmed...")
+        addLog("Validating login for ${_userRole.value} $userIdTrimmed...")
 
         val loginData = JSONObject().apply {
-            put("id", patientIdTrimmed)
-            put("role", "patient")
+            put("id", userIdTrimmed)
+            put("role", _userRole.value)
         }
         val requestBody = loginData.toString().toRequestBody("application/json".toMediaType())
         val request = Request.Builder()
@@ -130,24 +143,74 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                         val respStr = response.body?.string() ?: ""
                         try {
                             val json = JSONObject(respStr)
-                            val name = json.optString("name", _patientId.value)
+                            val name = json.optString("name", _userId.value)
                             addLog("Login successful! Welcome, $name.")
                             
                             // Save preferences
                             prefs.edit()
                                 .putString("serverUrl", _serverUrl.value)
-                                .putString("patientId", _patientId.value)
+                                .putString("userId", _userId.value)
+                                .putString("userRole", _userRole.value)
                                 .putBoolean("isLoggedIn", true)
                                 .apply()
 
+                            if (_userRole.value == "counselor") {
+                                fetchAssignedPatients()
+                            }
                             connectSignaling()
                         } catch (e: Exception) {
                             addLog("Error parsing login response.")
                             _callState.value = CallState.ERROR
                         }
                     } else {
-                        addLog("Login failed: Invalid credentials or not a patient.")
+                        addLog("Login failed: Invalid credentials or not a counselor.")
                         _callState.value = CallState.ERROR
+                    }
+                }
+            }
+        })
+    }
+
+    private fun fetchAssignedPatients() {
+        addLog("Fetching assigned patients...")
+        val request = Request.Builder()
+            .url("${_serverUrl.value}/api/counselors/${_userId.value}/patients")
+            .header("X-Requested-With", "XMLHttpRequest")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                viewModelScope.launch { addLog("Failed to fetch patients: ${e.localizedMessage}") }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                viewModelScope.launch {
+                    if (response.isSuccessful) {
+                        val respStr = response.body?.string() ?: "[]"
+                        try {
+                            val jsonArray = JSONArray(respStr)
+                            val parsedList = mutableListOf<PatientData>()
+                            for (i in 0 until jsonArray.length()) {
+                                val ptObj = jsonArray.getJSONObject(i)
+                                parsedList.add(
+                                    PatientData(
+                                        id = ptObj.optString("id", ""),
+                                        name = ptObj.optString("name", "Unknown"),
+                                        status = ptObj.optString("status", null),
+                                        severity = ptObj.optString("severity", null),
+                                        avatarColor = ptObj.optString("avatarColor", null),
+                                        progress = ptObj.optInt("progress", 0)
+                                    )
+                                )
+                            }
+                            _patients.value = parsedList
+                            addLog("Loaded ${parsedList.size} assigned patients.")
+                        } catch (e: Exception) {
+                            addLog("Error parsing patients: ${e.localizedMessage}")
+                        }
+                    } else {
+                        addLog("Failed to load patients list from server.")
                     }
                 }
             }
@@ -158,7 +221,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         addLog("Connecting to signaling server at ${_serverUrl.value}...")
         signalingClient = SignalingClient(
             backendUrl = _serverUrl.value,
-            patientId = _patientId.value,
+            userId = _userId.value,
+            userRole = _userRole.value,
             clientListener = object : SignalingClient.Listener {
                 override fun onConnectionStatusChanged(status: String) {
                     addLog(status)
@@ -172,7 +236,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 override fun onOfferReceived(from: String, offerSdp: String, callerName: String) {
-                    addLog("Signaling: Incoming offer received from counselor '$callerName' (socket ID: $from).")
+                    addLog("Signaling: Incoming offer received from patient '$callerName' (socket ID: $from).")
                     savedCallerId = from
                     savedOfferSdp = offerSdp
                     _callerName.value = callerName
@@ -185,7 +249,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 override fun onHangupReceived() {
-                    addLog("Signaling: Counselor hung up the call.")
+                    addLog("Signaling: Patient hung up the call.")
                     hangupLocally()
                 }
 
@@ -200,8 +264,9 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun answerCall() {
         if (_callState.value != CallState.INCOMING) return
 
+        val offerSdp = savedOfferSdp
         val callerId = savedCallerId ?: ""
-        if (savedOfferSdp == null || callerId.isBlank()) {
+        if (offerSdp == null || callerId.isBlank()) {
             addLog("Error: Cannot answer call. Missing offer or caller ID.")
             return
         }
@@ -232,7 +297,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         // WebRTC preparation & answer emission
-        webRTCManager?.prepareCall(savedOfferSdp!!) { answerSdp ->
+        webRTCManager?.prepareCall(offerSdp, _userRole.value == "counselor") { answerSdp ->
             signalingClient?.emitAnswer(callerId, answerSdp)
             _callState.value = CallState.ACTIVE
             startTimer()
@@ -240,8 +305,8 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startCall(targetId: String) {
-        val roomName = "counselflow-room-${_patientId.value.ifBlank { java.util.UUID.randomUUID().toString().substring(0, 8) }}"
-        val myName = _patientId.value.ifBlank { "Patient" }
+        val roomName = "counselflow-room-${targetId.ifBlank { java.util.UUID.randomUUID().toString().substring(0, 8) }}"
+        val myName = _userId.value.ifBlank { "Counselor" }
         addLog("LiveKit: Initiating call to $targetId in room $roomName")
 
         _callState.value = CallState.CONNECTING
@@ -262,7 +327,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
             }
         )
 
-        webRTCManager?.prepareCall(roomName) {
+        webRTCManager?.prepareCall(roomName, _userRole.value == "counselor") {
             _callState.value = CallState.ACTIVE
             startTimer()
         }
@@ -304,10 +369,12 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
         // Clear persistent login flag so user must sign in manually next time
         prefs.edit()
             .putBoolean("isLoggedIn", false)
-            .remove("patientId")
+            .remove("userId")
+            .remove("userRole")
             .apply()
-
-        _patientId.value = ""
+            
+        _userId.value = ""
+        _userRole.value = ""
 
         timerJob?.cancel()
         timerJob = null

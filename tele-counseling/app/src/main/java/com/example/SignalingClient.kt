@@ -8,7 +8,8 @@ import java.net.URISyntaxException
 
 class SignalingClient(
     private val backendUrl: String,
-    private val patientId: String,
+    private val userId: String,
+    private val userRole: String,
     private val clientListener: Listener
 ) {
     interface Listener {
@@ -39,7 +40,7 @@ class SignalingClient(
 
             socket?.on(Socket.EVENT_CONNECT) {
                 clientListener.onConnectionStatusChanged("Signaling: Connected. Registering...")
-                registerPatient()
+                registerUser()
             }
 
             socket?.on(Socket.EVENT_DISCONNECT) {
@@ -67,6 +68,20 @@ class SignalingClient(
                     }
                 } catch (e: Exception) {
                     clientListener.onError("Offer parsing error: ${e.localizedMessage}")
+                }
+            }
+
+            socket?.on("handoff-call") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val from = data.getString("socket")
+                        val roomName = data.getString("roomName")
+                        val callerName = data.optString("patientName", "Patient")
+                        clientListener.onOfferReceived(from, roomName, callerName)
+                    }
+                } catch (e: Exception) {
+                    clientListener.onError("Handoff parsing error: ${e.localizedMessage}")
                 }
             }
 
@@ -101,14 +116,14 @@ class SignalingClient(
         }
     }
 
-    private fun registerPatient() {
+    private fun registerUser() {
         try {
             val regData = JSONObject().apply {
-                put("role", "patient")
-                put("id", patientId)
+                put("role", userRole)
+                put("id", userId)
             }
             socket?.emit("register", regData)
-            clientListener.onConnectionStatusChanged("Signaling: Registered as patient with ID '$patientId'. Waiting for call...")
+            clientListener.onConnectionStatusChanged("Signaling: Registered as $userRole with ID '$userId'.")
         } catch (e: Exception) {
             clientListener.onError("Registration failed: ${e.localizedMessage}")
         }

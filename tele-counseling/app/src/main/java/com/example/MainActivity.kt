@@ -17,8 +17,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,7 +63,8 @@ class MainActivity : ComponentActivity() {
 fun MainScreen(viewModel: CallViewModel) {
     val callState by viewModel.callState.collectAsState()
     val serverUrl by viewModel.serverUrl.collectAsState()
-    val patientId by viewModel.patientId.collectAsState()
+    val userId by viewModel.userId.collectAsState()
+    val userRole by viewModel.userRole.collectAsState()
     val callerName by viewModel.callerName.collectAsState()
     val durationSeconds by viewModel.durationSeconds.collectAsState()
 
@@ -78,15 +79,30 @@ fun MainScreen(viewModel: CallViewModel) {
         )
     }
 
+    var pendingAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
     val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         permissionGranted = isGranted
         if (isGranted) {
             viewModel.addLog("Permission: Audio record permission granted!")
-            viewModel.answerCall()
+            pendingAction?.invoke()
+            if (pendingAction == null && callState == CallState.INCOMING) {
+                viewModel.answerCall()
+            }
         } else {
             viewModel.addLog("Permission Error: Audio record permission denied.")
+        }
+        pendingAction = null
+    }
+
+    val runWithPermission: (() -> Unit) -> Unit = { action ->
+        if (permissionGranted) {
+            action()
+        } else {
+            pendingAction = action
+            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -121,9 +137,11 @@ fun MainScreen(viewModel: CallViewModel) {
                         CallState.IDLE -> {
                             ConfigurationView(
                                 serverUrl = serverUrl,
-                                patientId = patientId,
+                                userId = userId,
+                                userRole = userRole,
                                 onServerUrlChange = { viewModel.updateServerUrl(it) },
-                                onpatientIdChange = { viewModel.updatePatientId(it) },
+                                onUserIdChange = { viewModel.updateUserId(it) },
+                                onUserRoleChange = { viewModel.updateUserRole(it) },
                                 onConnectClick = { viewModel.connect() }
                             )
                         }
@@ -133,10 +151,23 @@ fun MainScreen(viewModel: CallViewModel) {
                         }
 
                         CallState.WAITING -> {
-                            PatientDashboardView(
-                                patientId = patientId, // using patientId state var for patient ID
-                                onLogout = { viewModel.disconnect() }
-                            )
+                            if (userRole == "counselor") {
+                                CounselorDashboardView(
+                                    counselorId = userId,
+                                    viewModel = viewModel,
+                                    onCallRequested = { patientId ->
+                                        runWithPermission {
+                                            viewModel.startCall(patientId)
+                                        }
+                                    },
+                                    onLogout = { viewModel.disconnect() }
+                                )
+                            } else {
+                                PatientDashboardView(
+                                    patientId = userId,
+                                    onLogout = { viewModel.disconnect() }
+                                )
+                            }
                         }
 
                         CallState.INCOMING -> {
@@ -166,53 +197,274 @@ fun MainScreen(viewModel: CallViewModel) {
                         }
                     }
                 }
+
+                if (callState != CallState.ACTIVE && callState != CallState.INCOMING) {
+                    val logs by viewModel.logs.collectAsState()
+                    Spacer(Modifier.height(16.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(150.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+                        shape = RoundedCornerShape(16.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Connection Logs", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(8.dp))
+                            LazyColumn(reverseLayout = true) {
+                                items(logs.reversed()) { log ->
+                                    Text(log, color = Color(0xFFCBD5E1), fontSize = 11.sp, lineHeight = 16.sp)
+                                    Spacer(Modifier.height(4.dp))
+                                }
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+fun ConfigurationView(
+    serverUrl: String,
+    userId: String,
+    userRole: String,
+    onServerUrlChange: (String) -> Unit,
+    onUserIdChange: (String) -> Unit,
+    onUserRoleChange: (String) -> Unit,
+    onConnectClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+        shape = RoundedCornerShape(24.dp)
+    ) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Text("CounselFlow", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Text("Connect to the tele-calling backend", color = Color(0xFF94A3B8), fontSize = 14.sp)
+            Spacer(Modifier.height(24.dp))
+            
+            Text("Select Your Role", color = Color(0xFFCBD5E1), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                RoleSelectionButton(
+                    text = "I am a Patient",
+                    selected = userRole == "patient",
+                    onClick = { onUserRoleChange("patient") },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+                RoleSelectionButton(
+                    text = "I am a Counselor",
+                    selected = userRole == "counselor",
+                    onClick = { onUserRoleChange("counselor") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Spacer(Modifier.height(24.dp))
+
+            OutlinedTextField(
+                value = serverUrl,
+                onValueChange = onServerUrlChange,
+                label = { Text("Server URL", color = Color(0xFF94A3B8)) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF3B82F6),
+                    unfocusedBorderColor = Color(0xFF334155),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                )
+            )
+            Spacer(Modifier.height(16.dp))
+            OutlinedTextField(
+                value = userId,
+                onValueChange = onUserIdChange,
+                label = { Text(if (userRole == "counselor") "Counselor ID" else "Patient ID", color = Color(0xFF94A3B8)) },
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFF3B82F6),
+                    unfocusedBorderColor = Color(0xFF334155),
+                    focusedTextColor = Color.White,
+                    unfocusedTextColor = Color.White
+                )
+            )
+            Spacer(Modifier.height(32.dp))
+            Button(
+                onClick = onConnectClick,
+                enabled = userRole.isNotBlank(),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3B82F6)),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text("Login to System", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun RoleSelectionButton(text: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Button(
+        onClick = onClick,
+        modifier = modifier.height(48.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (selected) Color(0xFF3B82F6) else Color(0xFF0F172A)
+        ),
+        border = if (!selected) BorderStroke(1.dp, Color(0xFF334155)) else null,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Text(text, fontSize = 12.sp, color = if (selected) Color.White else Color(0xFF94A3B8))
+    }
+}
+
+@Composable
+fun PatientDashboardView(patientId: String, onLogout: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.size(120.dp).background(Color(0xFF1E293B), CircleShape).border(4.dp, Color(0xFF334155), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(60.dp), tint = Color(0xFF64748B))
+        }
+        Spacer(Modifier.height(24.dp))
+        Text("Waiting for call...", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Your ID: $patientId", color = Color(0xFF94A3B8), fontSize = 16.sp)
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = onLogout,
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text("Logout")
         }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConfigurationView(
-    serverUrl: String,
-    patientId: String,
-    onServerUrlChange: (String) -> Unit,
-    onpatientIdChange: (String) -> Unit,
-    onConnectClick: () -> Unit
+fun CounselorDashboardView(
+    counselorId: String,
+    viewModel: CallViewModel,
+    onCallRequested: (String) -> Unit,
+    onLogout: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B).copy(alpha = 0.5f)),
-        shape = RoundedCornerShape(28.dp),
-        border = BorderStroke(1.dp, Color(0xFF334155))
-    ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+    var inputPatientId by remember { mutableStateOf("") }
+    val patients by viewModel.patients.collectAsState(initial = emptyList<PatientData>() )
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.Person, contentDescription = null, tint = Color(0xFF2DD4BF), modifier = Modifier.size(48.dp))
-            Spacer(Modifier.height(16.dp))
-            Text("Patient Sign In", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(24.dp))
-            OutlinedTextField(
-                value = patientId,
-                onValueChange = onpatientIdChange,
-                placeholder = { Text("Enter Patient ID", color = Color(0xFF475569)) },
-                modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color(0xFF2DD4BF),
-                    unfocusedBorderColor = Color(0xFF334155),
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
-                )
-            )
-            Spacer(Modifier.height(24.dp))
+            Column {
+                Text("Welcome Back", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text("Counselor: $counselorId", color = Color(0xFF94A3B8), fontSize = 12.sp)
+            }
             Button(
-                onClick = onConnectClick,
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0D9488))
+                onClick = onLogout,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
             ) {
-                Text("Sign In", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                Text("Logout", fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Connection Status Banner
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF1E293B).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Connected. Ready to call patient.", color = Color(0xFFCBD5E1), fontSize = 14.sp)
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        // Start Consultation Call Card
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("START CONSULTATION CALL", color = Color(0xFF64748B), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(12.dp))
+                Text("Enter Patient ID to Call", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                Spacer(Modifier.height(8.dp))
+                
+                OutlinedTextField(
+                    value = inputPatientId,
+                    onValueChange = { inputPatientId = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF2DD4BF),
+                        unfocusedBorderColor = Color(0xFF334155),
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedContainerColor = Color(0xFF0F172A),
+                        unfocusedContainerColor = Color(0xFF0F172A)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(Modifier.height(16.dp))
+
+                Button(
+                    onClick = { if (inputPatientId.isNotBlank()) onCallRequested(inputPatientId) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Phone, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Call Patient", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
+
+        Text("Assigned Patients List", color = Color(0xFFCBD5E1), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(patients) { patient ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color(0xFF1E293B).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(patient.name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        val typeStr = patient.status ?: "Unknown"
+                        Text("ID: ${patient.id} - Amritsar - $typeStr", color = Color(0xFF94A3B8), fontSize = 12.sp)
+                    }
+                    TextButton(
+                        onClick = { inputPatientId = patient.id },
+                    ) {
+                        Text("Select", color = Color(0xFF94A3B8))
+                    }
+                }
             }
         }
     }
@@ -220,21 +472,45 @@ fun ConfigurationView(
 
 @Composable
 fun ConnectingView(onCancel: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        CircularProgressIndicator(color = Color(0xFF2DD4BF))
-        Spacer(Modifier.height(16.dp))
-        Text("Authenticating...", color = Color.White)
-        Spacer(Modifier.height(16.dp))
-        TextButton(onClick = onCancel) { Text("Cancel", color = Color(0xFFEF4444)) }
+    val infiniteTransition = rememberInfiniteTransition()
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(1000), repeatMode = RepeatMode.Reverse)
+    )
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.size(80.dp).background(Color(0xFF3B82F6).copy(alpha = alpha), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp, modifier = Modifier.size(40.dp))
+        }
+        Spacer(Modifier.height(32.dp))
+        Text("Connecting to network...", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(32.dp))
+        TextButton(onClick = onCancel) {
+            Text("Cancel", color = Color(0xFF94A3B8))
+        }
     }
 }
 
 @Composable
 fun ErrorStateView(onReset: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(48.dp))
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(64.dp))
         Spacer(Modifier.height(16.dp))
-        Text("Connection Error", color = Color.White, fontSize = 20.sp)
+        Text("Connection Error", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text("Could not connect to the backend server.", color = Color(0xFF94A3B8))
         Spacer(Modifier.height(16.dp))
         Button(onClick = onReset, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444))) {
             Text("Go Back")
@@ -288,138 +564,6 @@ fun ActiveCallView(callerName: String, durationSeconds: Int, onEndCall: () -> Un
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Text("End Call", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-    }
-}
-
-@Composable
-fun PatientDashboardView(patientId: String, onLogout: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("Welcome Back", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                Text("Patient: $patientId", color = Color(0xFF94A3B8), fontSize = 12.sp)
-            }
-            Button(
-                onClick = onLogout,
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                shape = RoundedCornerShape(16.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
-            ) {
-                Text("Logout", fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // Connection Status Banner
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color(0xFF1E293B).copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                .border(1.dp, Color(0xFF334155), RoundedCornerShape(12.dp))
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Connected. Waiting for counselor call...", color = Color(0xFFCBD5E1), fontSize = 14.sp)
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        // ASSIGNED COUNSELOR Card
-        Text("YOUR ASSIGNED COUNSELOR", color = Color(0xFF64748B), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Spacer(Modifier.height(8.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(Color(0xFF0F172A), CircleShape)
-                        .border(1.dp, Color(0xFF334155), CircleShape),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Default.Person, contentDescription = null, tint = Color.White)
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Dr. Amanpreet", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    Text("Tele-Counsellor (Amritsar)", color = Color(0xFF94A3B8), fontSize = 12.sp)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(6.dp).background(Color(0xFF22C55E), CircleShape))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Connected", color = Color(0xFF22C55E), fontSize = 12.sp)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        // SELF-CARE TIP
-        Text("SELF-CARE TIP", color = Color(0xFF64748B), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Spacer(Modifier.height(8.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF312E81).copy(alpha = 0.4f)),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Text(
-                "One day at a time. You are stronger than you think.",
-                color = Color(0xFFC7D2FE),
-                fontSize = 15.sp,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
-                modifier = Modifier.padding(20.dp)
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        Text("Self-Care Tools", color = Color(0xFFCBD5E1), fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            val tools = listOf(
-                Triple("Breathing", "Calm your mind", Color(0xFF0891B2)),
-                Triple("Mood Log", "Record feelings", Color(0xFFD97706)),
-                Triple("Secure Chat", "Message counselor", Color(0xFF4F46E5)),
-                Triple("Reminders", "Set check-ins", Color(0xFFE11D48))
-            )
-            items(tools.size) { index ->
-                val (title, subtitle, color) = tools[index]
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Box(
-                            modifier = Modifier.size(40.dp).background(color.copy(alpha = 0.2f), RoundedCornerShape(10.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(Icons.Default.Favorite, contentDescription = null, tint = color)
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        Text(subtitle, color = Color(0xFF94A3B8), fontSize = 11.sp)
-                    }
-                }
             }
         }
     }

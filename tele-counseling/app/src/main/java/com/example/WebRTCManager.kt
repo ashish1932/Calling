@@ -41,7 +41,7 @@ class WebRTCManager(
         listener.onWebRTCLog("LiveKit: Manager initialized.")
     }
 
-    fun prepareCall(offerSdp: String, onAnswerCreated: (String) -> Unit) {
+    fun prepareCall(offerSdp: String, isCounselor: Boolean, onAnswerCreated: (String) -> Unit) {
         listener.onWebRTCLog("LiveKit: Preparing call for room: $offerSdp")
         
         try {
@@ -59,8 +59,8 @@ class WebRTCManager(
                     listener.onWebRTCLog("LiveKit: Fetching token for room $offerSdp...")
                     val json = JSONObject().apply {
                         put("roomName", offerSdp)
-                        put("participantName", "Patient-Mobile")
-                        put("isCounselor", false)
+                        put("participantName", if (isCounselor) "Counselor-Mobile" else "Patient-Mobile")
+                        put("isCounselor", isCounselor)
                     }
                     val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                     val request = Request.Builder()

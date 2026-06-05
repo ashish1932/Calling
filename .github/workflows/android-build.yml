@@ -27,15 +27,9 @@ jobs:
         cd tele-counseling
         gradle assembleDebug
 
-    - name: Build Counselor App
-      run: |
-        cd counselor-app
-        gradle assembleDebug
-
     - name: Upload APKs
       uses: actions/upload-artifact@v4
       with:
-        name: android-apks
+        name: counselflow-unified-apk
         path: |
           tele-counseling/app/build/outputs/apk/debug/*.apk
-          counselor-app/app/build/outputs/apk/debug/*.apk
