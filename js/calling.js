@@ -168,7 +168,15 @@ class CallManager {
                     this.isActive = true;
                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
                     window.CounselFlow.app.switchScreen('call-console');
-                    this.startTimer();
+                    this.duration = 0;
+                    this.timerInterval = setInterval(() => {
+                      this.duration++;
+                      const hrs = Math.floor(this.duration / 3600).toString();
+                      const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                      const secs = (this.duration % 60).toString().padStart(2, '0');
+                      const timerEl = document.getElementById('call-duration-timer');
+                      if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                    }, 1000);
                     
                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
