@@ -1,6 +1,15 @@
 pipeline {
   agent any
 
+  parameters {
+    string(name: 'GIT_BRANCH', defaultValue: 'main', description: 'Branch to build and deploy')
+    string(name: 'GIT_URL', defaultValue: 'https://github.com/ashish1932/Calling.git', description: 'Repository URL')
+    string(name: 'VM_HOST', defaultValue: '192.168.1.55', description: 'Target VM IP/Host')
+    string(name: 'VM_USER', defaultValue: 'cubeai', description: 'SSH User for target VM')
+    string(name: 'VM_APP_DIR', defaultValue: '/home/cubeai/punjab-voice-app', description: 'Application directory on the target VM')
+    string(name: 'NGROK_URL', defaultValue: '', description: 'Ngrok public URL')
+  }
+
   environment {
     DOCKER_BUILDKIT = '1'
 
@@ -11,12 +20,13 @@ pipeline {
     BACKEND_IMAGE  = 'casdevops/punjab-voice-backend'
     FRONTEND_IMAGE = 'casdevops/punjab-voice-frontend'
 
-    VM_USER    = 'cubeai'
-    VM_HOST    = '192.168.1.55'
-    VM_APP_DIR = '/home/cubeai/punjab-voice-app'
+    VM_USER    = "${params.VM_USER ?: 'cubeai'}"
+    VM_HOST    = "${params.VM_HOST ?: '192.168.1.55'}"
+    VM_APP_DIR = "${params.VM_APP_DIR ?: '/home/cubeai/punjab-voice-app'}"
 
-    GIT_BRANCH = 'deploy'
-    GIT_URL    = 'https://github.com/cubeaisolutionstech/Punjab-voice-AI-Assistant-.git'
+    GIT_BRANCH = "${params.GIT_BRANCH ?: 'main'}"
+    GIT_URL    = "${params.GIT_URL ?: 'https://github.com/ashish1932/Calling.git'}"
+    NGROK_URL  = "${params.NGROK_URL ?: (env.NGROK_URL ?: '')}"
 
     BACKEND_DIR  = 'server'
     FRONTEND_DIR = '.'
