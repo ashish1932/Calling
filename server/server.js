@@ -601,10 +601,10 @@ app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
       return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured on the server" } });
     }
     
-    // Map request model to gemini-1.5-flash
+    // Map request model to gemini-2.5-flash
     const body = {
       ...req.body,
-      model: 'gemini-1.5-flash'
+      model: 'gemini-2.5-flash'
     };
 
     const response = await axios.post('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', body, {
@@ -662,7 +662,7 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     // ── Step 1: Call Gemini 1.5 Flash multimodal transcription ──
     let rawText = '';
     try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
       const requestBody = {
         contents: [{
           parts: [
@@ -745,7 +745,7 @@ CRITICAL:
           '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
           'Return ONLY the cleaned transcript, nothing else.';
 
-        const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
         const correctionBody = {
           contents: [{
             parts: [
@@ -805,7 +805,7 @@ app.post('/api/ai/gemini/chat', authenticateJWT, async (req, res) => {
       }
     }
 
-    const model = req.body.geminiModel || 'gemini-2.0-flash';
+    const model = req.body.geminiModel || 'gemini-2.5-flash';
     const geminiPayload = {
       contents: geminiContents,
       generationConfig: {
