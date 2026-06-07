@@ -997,7 +997,7 @@ export default function App() {
           <View style={styles.loginCard}>
             <View style={styles.iconContainer}>
               <Image 
-                source={require('./assets/logo.png')} 
+                source={require('./assets/avatar.png')} 
                 style={{ width: 60, height: 60, borderRadius: 30 }} 
               />
             </View>
