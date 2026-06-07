@@ -3544,6 +3544,17 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
             <h1 style="font-size:28px; font-weight:800; color:var(--text-primary); margin-bottom:4px; letter-spacing:-0.5px;">CounselFlow</h1>
             <p style="font-size:12px; color:var(--text-secondary); letter-spacing:0.5px;">Tele-Counseling Platform • Community Bridge Model</p>
           </div>
+          
+          <!-- Government Banner -->
+          <div class="government-banner" style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 12px; margin-bottom: 20px; background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px solid var(--border-light); text-align: center;">
+            <img src="logo.png" alt="S. Bhagwant Singh Mann, Chief Minister of Punjab" style="width: 90px; height: 90px; border-radius: 8px; border: 1.5px solid var(--accent-orange); object-fit: cover; object-position: top; box-shadow: 0 4px 8px rgba(0,0,0,0.15);">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 12px; font-weight: 800; color: var(--text-primary);">S. Bhagwant Singh Mann</span>
+              <span style="font-size: 9.5px; color: var(--accent-orange); font-weight: 600;">Hon'ble Chief Minister, Punjab</span>
+              <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600;">Drug-Free Punjab Campaign</span>
+            </div>
+          </div>
+
           <!-- Login Form Card -->
           <div class="login-card">
             <h3 style="font-size:20px; color:var(--text-primary); margin-bottom:4px; font-weight:700;">Sign In</h3>
