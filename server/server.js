@@ -654,8 +654,8 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
 
     // Convert audio buffer to base64
     const base64Audio = req.file.buffer.toString('base64');
-    let mimeType = req.file.mimetype || 'audio/m4a';
-    if (originalName.endsWith('.m4a')) mimeType = 'audio/m4a';
+    let mimeType = req.file.mimetype || 'audio/x-m4a';
+    if (originalName.endsWith('.m4a') || mimeType === 'audio/m4a') mimeType = 'audio/x-m4a';
     else if (originalName.endsWith('.webm')) mimeType = 'audio/webm';
     else if (originalName.endsWith('.wav')) mimeType = 'audio/wav';
 
