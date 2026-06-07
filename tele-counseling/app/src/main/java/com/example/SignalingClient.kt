@@ -8,7 +8,8 @@ import java.net.URISyntaxException
 
 class SignalingClient(
     private val backendUrl: String,
-    private val patientId: String,
+    private val userId: String,
+    private val userRole: String,
     private val clientListener: Listener
 ) {
     interface Listener {
@@ -39,7 +40,7 @@ class SignalingClient(
 
             socket?.on(Socket.EVENT_CONNECT) {
                 clientListener.onConnectionStatusChanged("Signaling: Connected. Registering...")
-                registerPatient()
+                registerUser()
             }
 
             socket?.on(Socket.EVENT_DISCONNECT) {
@@ -58,7 +59,7 @@ class SignalingClient(
                         val data = args[0] as JSONObject
                         val from = data.getString("socket")
                         val offerObj = data.getJSONObject("offer")
-                        val offerSdp = offerObj.getString("sdp")
+                        val offerSdp = offerObj.optString("roomName", offerObj.optString("sdp", ""))
                         
                         val callerInfo = data.optJSONObject("callerInfo")
                         val callerName = callerInfo?.optString("name") ?: "Counselor"
@@ -67,6 +68,20 @@ class SignalingClient(
                     }
                 } catch (e: Exception) {
                     clientListener.onError("Offer parsing error: ${e.localizedMessage}")
+                }
+            }
+
+            socket?.on("handoff-call") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val from = data.getString("socket")
+                        val roomName = data.getString("roomName")
+                        val callerName = data.optString("patientName", "Patient")
+                        clientListener.onOfferReceived(from, roomName, callerName)
+                    }
+                } catch (e: Exception) {
+                    clientListener.onError("Handoff parsing error: ${e.localizedMessage}")
                 }
             }
 
@@ -101,16 +116,38 @@ class SignalingClient(
         }
     }
 
-    private fun registerPatient() {
+    private fun registerUser() {
         try {
             val regData = JSONObject().apply {
-                put("role", "patient")
-                put("id", patientId)
+                put("role", userRole)
+                put("id", userId)
             }
             socket?.emit("register", regData)
-            clientListener.onConnectionStatusChanged("Signaling: Registered as patient with ID '$patientId'. Waiting for call...")
+            clientListener.onConnectionStatusChanged("Signaling: Registered as $userRole with ID '$userId'.")
         } catch (e: Exception) {
             clientListener.onError("Registration failed: ${e.localizedMessage}")
+        }
+    }
+
+    fun emitCallUser(to: String, roomName: String, callerName: String) {
+        try {
+            val offerObj = JSONObject().apply {
+                put("type", "offer")
+                put("sdp", roomName)
+                put("roomName", roomName)
+            }
+            val callerInfoObj = JSONObject().apply {
+                put("name", callerName)
+            }
+            val data = JSONObject().apply {
+                put("to", to)
+                put("offer", offerObj)
+                put("callerInfo", callerInfoObj)
+            }
+            socket?.emit("call-user", data)
+            Log.d("SignalingClient", "Emitted call-user to target: $to with room: $roomName")
+        } catch (e: Exception) {
+            clientListener.onError("Emitting call failed: ${e.localizedMessage}")
         }
     }
 

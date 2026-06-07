@@ -11,12 +11,12 @@ class CallManager {
     this.isHeld = false; // UX #47: Hold state toggle
     this.duration = 0;
     this.timerInterval = null;
+    this.whisperQueue = Promise.resolve(); // Issue 2: Initialize whisperQueue
     this.canvas = null;
     this.ctx = null;
     this.animationFrame = null;
     this.counselorRecorder = null;
     this.patientRecorder = null;
-    this.patientIsTranscribing = false;
     this.activePatient = null;
     this.activeLanguage = 'pa-IN';
     
@@ -84,9 +84,8 @@ class CallManager {
 
       this.socket.on('connect', () => {
         console.log('[WebRTC] Connected to Signaling Server:', this.socket.id);
-        // BUG FIX #4: Use stable counselor ID — a random ID on every reconnect breaks signal routing
-        // because the patient's stored counselorSocket ID would no longer match after a network blip
-        this.socket.emit('register', { role: 'counselor', id: 'counselor-1' });
+        const counselorId = 'counselor-' + Math.random().toString(36).substr(2, 9);
+        this.socket.emit('register', { role: 'counselor', id: counselorId });
       });
 
       this.socket.on('answer-made', async (data) => {
@@ -119,7 +118,7 @@ class CallManager {
           await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
           window.CounselFlow.writeAuditEvent(
             'ICE_CANDIDATE_RECEIVED',
-            this.activePatient ? this.activePatient.id : (this.patientSocketId || 'unknown'),
+            this.currentPatientId,
             null,
             window.CounselFlow.getActiveRole(),
             `Received ICE candidate from ${data.source || 'patient'}`
@@ -150,99 +149,68 @@ class CallManager {
         this.endCall();
       });
 
-      // Counselor Web Dashboard Sync Listeners
-      this.socket.on('counselor-call-started', (data) => {
-        console.log('[WebRTC Sync] Mobile counselor call started with patient:', data.patientId);
-        const pt = window.CounselFlow.app.patients.find(p => p.id === data.patientId);
-        if (pt) {
-          window.CounselFlow.app.selectedPatient = pt;
-          window.CounselFlow.app.switchScreen('call-console');
-          
-          this.activePatient = pt;
-          this.patientSocketId = data.callerSocketId;
-          this.isActive = true;
-          this.duration = 0;
-          
-          const languageCode = pt.preferredLanguage || 'pa-IN';
-          const langSelect = document.getElementById('call-language-select');
-          if (langSelect) langSelect.value = languageCode;
-          
-          this.activeLanguage = languageCode;
-          
-          document.getElementById('call-status-dot').className = 'status-dot active';
-          document.getElementById('call-status-label').innerText = 'Calling...';
-          document.getElementById('call-recipient-name').innerText = escapeHtml(pt.name);
-          document.getElementById('call-recipient-details').innerText = `${escapeHtml(pt.id)} | ${escapeHtml(pt.addictionCategory)}`;
-          document.getElementById('call-recipient-avatar').innerText = pt.name.split(' ').map(n => n[0]).join('');
-          document.getElementById('call-recipient-avatar').classList.add('active-call');
-          
-          document.getElementById('btn-call-start').style.display = 'none';
-          document.getElementById('btn-call-end').style.display = 'flex';
-          
-          document.getElementById('call-transcript-log').innerHTML = '';
-          document.getElementById('call-duration-timer').innerText = '0:00:00';
-          
-          document.getElementById('call-post-summary-section').style.display = 'none';
-          document.getElementById('call-transcript-log').style.display = 'flex';
-          
-          const postCallPanel = document.getElementById('post-call-actions-panel');
-          if (postCallPanel) postCallPanel.style.display = 'none';
-        }
-      });
+      this.socket.on('dashboard-observe-call', async (data) => {
+        if (!this.room && data.roomName) {
+            console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
+            try {
+                const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                const resp = await fetch('/api/livekit/token', {
+                    method: 'POST',
+                    headers: { 
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                      'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                });
+                const tokenData = await resp.json();
+                if (tokenData.token && window.LivekitClient) {
+                    this.isActive = true;
+                    this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
+                    window.CounselFlow.app.switchScreen('call-console');
+                    this.duration = 0;
+                    this.timerInterval = setInterval(() => {
+                      this.duration++;
+                      const hrs = Math.floor(this.duration / 3600).toString();
+                      const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                      const secs = (this.duration % 60).toString().padStart(2, '0');
+                      const timerEl = document.getElementById('call-duration-timer');
+                      if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                    }, 1000);
+                    
+                    this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                    this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                        if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                            const element = track.attach();
+                            document.body.appendChild(element);
+                            if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                            
+                            const stream = new MediaStream([track.mediaStreamTrack]);
+                            const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                            if (speakerName === "Counselor") {
+                                this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
+                            } else {
+                                this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
+                            }
+                        }
+                    });
+                    this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                        console.log('[LiveKit] Participant disconnected:', participant.identity);
+                        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                        this.endCall();
+                    });
+                    
+                    this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                        console.log('[LiveKit] Room disconnected.');
+                        this.endCall();
+                    });
 
-      this.socket.on('counselor-call-connected', (data) => {
-        console.log('[WebRTC Sync] Mobile counselor call connected.');
-        if (this.isActive) {
-          document.getElementById('call-status-dot').className = 'status-dot connected';
-          document.getElementById('call-status-label').innerText = 'In Consultation (Passive Monitor)';
-          
-          if (this.timerInterval) clearInterval(this.timerInterval);
-          this.timerInterval = setInterval(() => {
-            this.duration++;
-            const hrs = Math.floor(this.duration / 3600).toString();
-            const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
-            const secs = (this.duration % 60).toString().padStart(2, '0');
-            document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
-          }, 1000);
-        }
-      });
-
-      this.socket.on('counselor-transcript-update', (data) => {
-        console.log('[WebRTC Sync] Received live transcript chunk from mobile:', data);
-        if (this.isActive) {
-          // If we start receiving actual live transcripts from the mobile app, stop the scenario script
-          if (this.scenarioInterval) {
-            clearTimeout(this.scenarioInterval);
-            this.scenarioInterval = null;
-          }
-          this.addTranscriptLine(data.sender === 'counselor' ? 'Counselor' : 'Patient', data.text, false);
-        }
-      });
-
-      this.socket.on('transcript-update', (data) => {
-        console.log('[WebRTC] Received live transcript from peer:', data);
-        if (this.isActive) {
-          // If we receive a patient transcript from the socket, it means the patient mobile app
-          // is transcribing their own voice. We should disable our local remote patient recorder
-          // to avoid double transcription.
-          if (data.sender === 'patient') {
-            this.patientIsTranscribing = true;
-            if (this.patientRecorder) {
-              console.log('[ASR] Patient is transcribing locally. Stopping remote patient recorder to avoid duplicates.');
-              try {
-                this.patientRecorder.stop();
-              } catch (e) {}
-              this.patientRecorder = null;
+                    await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                    window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                }
+            } catch (err) {
+                console.error('[LiveKit] Failed to observe call:', err);
             }
-          }
-          this.addTranscriptLine(data.sender === 'counselor' ? 'Counselor' : 'Patient', data.text, false);
-        }
-      });
-
-      this.socket.on('counselor-call-ended', () => {
-        console.log('[WebRTC Sync] Mobile counselor call ended.');
-        if (this.isActive) {
-          this.endCall();
         }
       });
     } else {
@@ -250,119 +218,98 @@ class CallManager {
     }
   }
 
-  // Init WebRTC Offer for In-App Calling
-  async initWebRTC(patient) {
-    if (!this.socket) {
-      window.CounselFlow.app.showToast('Not Connected', 'Socket not connected to signaling server. Refresh the page.', 'error');
+  // Init LiveKit for In-App Calling (App-to-App Architecture)
+  async initLiveKit(patient) {
+    if (!window.LivekitClient) {
+      window.CounselFlow.app.showToast('Error', 'LiveKit SDK not loaded', 'error');
       return;
     }
-    
+
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,           // Mono — optimal for speech recognition
-          echoCancellation: true,    // Remove echo from speakers
-          noiseSuppression: true,    // Suppress ambient background noise
-          autoGainControl: true,     // Normalize volume levels
-          sampleRate: 16000          // 16kHz — Whisper's native sample rate
+      // The web dashboard no longer publishes its mic. It acts as an observer for ASR.
+      const roomName = `counselflow-room-${patient.id}`;
+      const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+      
+      const resp = await fetch('/api/livekit/token', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+          'X-Requested-With': 'XMLHttpRequest'
         },
-        video: false
+        body: JSON.stringify({ roomName, participantName, isCounselor: true }) // Still considered a counselor for JWT role
       });
-      console.log('[WebRTC] Microphone access granted.');
+      
+      const data = await resp.json();
+      if (!data.token) throw new Error(data.error || "Could not get LiveKit token");
+      
+      this.room = new LivekitClient.Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
 
-      // Fetch ICE servers (STUN + TURN) from backend — TURN relays audio across different networks
-      let iceConfig = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
+      this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === LivekitClient.Track.Kind.Audio || track.kind === 'audio') {
+          console.log('[LiveKit] Remote audio track subscribed from:', participant.name || participant.identity);
+          const element = track.attach();
+          document.body.appendChild(element);
+          if (typeof element.play === 'function') {
+            element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
           }
-        ],
-        iceCandidatePoolSize: 10,
-      };
-      try {
-        const apiBase = '/api';
-        const resp = await fetch(`${apiBase}/ice-servers`);
-        if (resp.ok) {
-          const data = await resp.json();
-          iceConfig = { iceServers: data.iceServers, iceCandidatePoolSize: data.iceCandidatePoolSize || 10 };
-          console.log('[WebRTC] Loaded ICE config from server:', iceConfig.iceServers.length, 'servers');
-        }
-      } catch (iceErr) {
-        console.warn('[WebRTC] Could not load ICE config from server, using STUN fallback:', iceErr.message);
-      }
-
-      this.peerConnection = new RTCPeerConnection(iceConfig);
-
-      this.localStream.getTracks().forEach(track => this.peerConnection.addTrack(track, this.localStream));
-
-      // When remote audio track arrives, attach to audio element
-      this.peerConnection.ontrack = (event) => {
-        console.log('[WebRTC] Remote audio track received.', event);
-        const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-        this.remoteAudio.srcObject = stream;
-        if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
-          this.remoteAudio.play().catch(e => {
-            console.warn('[WebRTC] Audio autoplay blocked:', e);
-            this.addWarningToTranscriptLog(
-              "Audio Blocked", 
-              "Browser blocked autoplay. Click anywhere on the screen to enable audio."
-            );
-          });
-        }
-      };
-
-      // ICE candidates: buffer if patient hasn't answered yet
-      this.peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          if (this.patientAnswered) {
-            const targetId = this.patientSocketId || patient.id;
-            this.socket.emit('ice-candidate', {
-              to: targetId,
-              candidate: event.candidate
-            });
+          
+          // Wire up Live Transcription!
+          const stream = new MediaStream([track.mediaStreamTrack]);
+          const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+          
+          if (speakerName === "Counselor") {
+            this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
           } else {
-            this.iceCandidateQueue.push(event.candidate);
+            this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
           }
         }
-      };
-
-      // Log connection state changes for debugging
-      this.peerConnection.onconnectionstatechange = () => {
-        console.log('[WebRTC] Connection state:', this.peerConnection.connectionState);
-        if (this.peerConnection.connectionState === 'connected') {
-          window.CounselFlow.app.showToast('Audio Connected', 'WebRTC peer-to-peer audio link established.', 'success');
-        } else if (this.peerConnection.connectionState === 'failed' || this.peerConnection.connectionState === 'disconnected') {
-          console.warn('[WebRTC] P2P failed — switching to Socket audio relay mode');
-          window.CounselFlow.app.showToast('Switching to Relay', 'Network relay mode activated — audio will continue via server.', 'info');
-          this.startSocketAudioRelay();
-        }
-      };
-
-      this.peerConnection.oniceconnectionstatechange = () => {
-        console.log('[WebRTC] ICE state:', this.peerConnection.iceConnectionState);
-      };
-
-      const offer = await this.peerConnection.createOffer();
-      await this.peerConnection.setLocalDescription(offer);
-
-      this.socket.emit('call-user', {
-        to: patient.id,
-        offer: offer,
-        callerInfo: { name: "Dr. Amanpreet (Counselor)" }
       });
+
+      this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        track.detach();
+      });
+
+      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+        console.log('[LiveKit] Participant disconnected:', participant.identity);
+        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+        this.endCall();
+      });
+
+      this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+        console.log('[LiveKit] Room disconnected.');
+        this.endCall();
+      });
+
+      // Connect to LiveKit Room
+      await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', data.token);
+      console.log('[LiveKit] Connected to room as Dashboard Observer');
+
+      // 1. Notify patient mobile app to join room
+      this.socket.emit('call-user', {
+         to: patient.id,
+         offer: { type: 'livekit', roomName: roomName },
+         callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+      });
+      
+      // 2. Notify counselor mobile app to join room (Handoff)
+      const counselorId = patient.counselorId || "CO-101";
+      this.socket.emit('handoff-call', {
+         to: counselorId,
+         roomName: roomName,
+         patientName: patient.name
+      });
+      
       window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via Patient Portal...`, "info");
+      
     } catch (error) {
-      console.error("WebRTC Setup failed:", error);
-      this.endCall(); // Clean up broken UI state
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        window.CounselFlow.app.showToast("Microphone Blocked", "Please allow microphone access in your browser settings, then try again.", "error");
-      } else {
-        window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up WebRTC audio.", "error");
-      }
+      console.error("LiveKit Setup failed:", error);
+      this.endCall();
+      window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up LiveKit audio.", "error");
+      throw error;
     }
   }
 
@@ -400,149 +347,126 @@ class CallManager {
     });
   }
 
-  // Initialize Live Transcription using Groq Whisper (Replaces flaky Web Speech API)
-  initLiveTranscription() {
-    try {
-      // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers
-      const setupChunkedRecorder = (stream, speaker) => {
-        if (!stream || !window.MediaRecorder) return null;
-        let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 48000 };
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-          options = { mimeType: 'audio/webm', audioBitsPerSecond: 48000 };
-          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-             options = {}; // fallback for Safari
-          }
-        }
-        
-        const recorder = new MediaRecorder(stream, options);
-        recorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-            console.debug(`[ASR Debug] ${speaker} chunk: ${event.data.size} bytes, MIME: ${recorder.mimeType}`);
-            this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
-              const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-              if (transcript && this.isActive) {
-                console.debug(`[ASR Debug] ${speaker} raw transcript: "${transcript}"`);
-
-                //  Hallucination Guard 
-                const isHallucination = (text) => {
-                  const t = text.trim();
-
-                  // 1. Pure punctuation / ellipsis
-                  if (/^[\s.,…!?\-_।]+$/.test(t)) return true;
-
-                  // 2. Repetition loop detection (same word ≥3 times in a row)
-                  if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
-
-                  // 3. Block extremely short single characters that aren't real words (e.g. single consonants like "b", "x")
-                  if (t.length < 2 && /^[a-z]+$/i.test(t)) return true;
-
-                  const cleanT = t.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
-
-                  // Short phrases/words that should only be blocked if they are the EXACT transcript
-                  const EXACT_HALLUCINATIONS = [
-                    "do not", "don't", "do not track", "pata", "pata ne",
-                    "thank you", "bye bye", "goodbye", "see you", "okay okay okay",
-                    "you", "so", "the", "and", "is", "it",
-                    "ਹਾ", "ਜੀਹ", "ਓਹ", "ਅਰੇ", "ਸੁਣੋ", // meaningless fillers
-                    "हूँ", "हैं", "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"
-                  ];
-
-                  // Long unique phrases that can be blocked if they appear anywhere
-                  const SUBSTRING_HALLUCINATIONS = [
-                    "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
-                    "hello i'm a 12 year old", "i'm a 12 year old",
-                    "thank you for watching", "thanks for watching", "please subscribe",
-                    "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
-                    "see you in the next video", "see you next time",
-                    "लेकिन मेरे में क्यों नहीं होना चाहिए",
-                    "तुक बोले गया तब ना बोल तो रहा है",
-                    "तो डेस्पोर्ट चेक करना",
-                    "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
-                  ];
-
-                  if (EXACT_HALLUCINATIONS.includes(cleanT)) return true;
-                  if (SUBSTRING_HALLUCINATIONS.some(h => cleanT.includes(h.toLowerCase()))) return true;
-
-                  // 4. Detect if entire text is just filler sounds
-                  if (/^(um|uh|hmm|hm|ah|oh|eh|huh|mm|mhm|erm|uhm|uhh|hmm+)[\s.,!?]*$/i.test(cleanT)) return true;
-
-                  return false;
-                };
-
-                if (isHallucination(transcript)) {
-                  console.debug('[ASR] Filtered hallucination:', transcript);
-                  return;
-                }
-                // 
-
-                this.addTranscriptLine(speaker, transcript);
-
-              }
-            }).catch(e => console.error("Whisper transcription error:", e));
-          }
-        };
-
-        recorder.start();
-        
-        // Interval to stop and restart so headers are rewritten for the Whisper API
-        const intervalId = setInterval(() => {
-          if (this.isActive && recorder.state === 'recording') {
-            recorder.stop();
-            recorder.start();
-          } else if (!this.isActive) {
-            clearInterval(intervalId);
-            if (recorder.state === 'recording') recorder.stop();
-          }
-        }, 6000);
-        
-        return recorder;
-      };
-
-      // 1. Setup Counselor Mic Recorder
-      if (this.localStream) {
-        this.counselorRecorder = setupChunkedRecorder(this.localStream, "Counselor");
-        console.log('[ASR] Counselor live transcription started.');
-      } else {
-        console.warn('[ASR] Local stream or MediaRecorder not available for counselor.');
+  // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers for Groq Whisper
+  setupChunkedRecorder(stream, speaker) {
+    if (!stream || !window.MediaRecorder) return null;
+    let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options = { mimeType: 'audio/webm', audioBitsPerSecond: 16000 };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+         options = {}; // fallback for Safari
       }
-
-      // 2. Setup Patient Remote Stream Recorder (if peer connection has streams)
-      if (this.peerConnection) {
-        const attachRemoteRecorder = (stream) => {
-          if (!stream || this.patientRecorder) return;
-          this.patientRecorder = setupChunkedRecorder(stream, "Patient");
-          console.log('[ASR] Patient live transcription started.');
-        };
-
-        // Otherwise listen for the track event
-        this.peerConnection.addEventListener('track', (e) => {
-          attachRemoteRecorder(e.streams[0]);
-        });
-        
-        // Ensure we try again when the connection is fully established
-        this.peerConnection.addEventListener('connectionstatechange', () => {
-          if (this.peerConnection.connectionState === 'connected') {
-            let retries = 0;
-            const checkReceivers = () => {
-              const receivers = this.peerConnection.getReceivers();
-              const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
-              if (audioReceiver && audioReceiver.track.readyState === 'live') {
-                const remoteStream = new MediaStream([audioReceiver.track]);
-                attachRemoteRecorder(remoteStream);
-              } else if (retries < 10) {
-                retries++;
-                setTimeout(checkReceivers, 500);
-              }
-            };
-            checkReceivers();
-          }
-        });
-      }
-
-    } catch (e) {
-      console.error("[ASR] Live transcription setup failed:", e);
-      window.CounselFlow.app.showToast("Transcription Error", "Could not start live transcription engine.", "error");
     }
+    
+    const recorder = new MediaRecorder(stream, options);
+    recorder.ondataavailable = async (event) => {
+      try {
+        if (event.data.size > 1500 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+          this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+            const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+            if (transcript && this.isActive) {
+
+            //  Hallucination Guard 
+            const isHallucination = (text) => {
+              const t = text.trim();
+
+              // 2. Repetition loop detection (same word ≥3 times in a row)
+              if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
+
+              // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
+              const HALLUCINATIONS = [
+                "what's going on", "everything is fine", "i'm feeling a bit anxious",
+                "i am feeling very anxious and restless my heart is racing and i am having trouble breathing",
+                "i am feeling very anxious and restless",
+                "i have been experiencing chest pain and shortness of breath for the past few days",
+                "my heart rate is very fast and i am having trouble sleeping",
+                "i am also experiencing palpitations and dizziness",
+                "i am worried that i might be having a heart attack",
+                "i am feeling very scared and anxious",
+                "i am feeling very weak",
+                "doctor",
+                "i am experiencing severe chest pain and difficulty breathing",
+                "i am feeling like i am going to pass out",
+                "i am feeling like i am going to collapse",
+                "i am scared",
+                "i am experiencing chest pain shortness of breath and a feeling of impending doom",
+                "i am feeling like i am going to die",
+                "i am feeling a tightness in my chest and throat",
+                "i am feeling numb my body is shaking and i am having trouble speaking",
+                "i am feeling like i am losing control",
+                "i am experiencing a sense of detachment from my body",
+                "i am feeling like i am floating above myself",
+                "i am feeling a sense of panic and anxiety",
+                "i am feeling like i am going to pass out",
+                "i am feeling a lump in my throat",
+                "i am feeling a sense of dread my heart is racing and i am having trouble breathing",
+                "thank you for watching", "thank you", "thanks for watching",
+                "please subscribe", "like and subscribe",
+                "कर दो", "झाल", "अलवूँ", "जरूर जो",
+                "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
+                "bye bye", "goodbye", "see you", "okay okay okay",
+                "hello", "all right", "yeah", "okay", "yes", "no",
+                ".   .", ". . .", "...",
+              ];
+              const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
+              if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
+
+              return false;
+            };
+
+            if (isHallucination(transcript)) {
+              console.debug('[ASR] Filtered hallucination:', transcript);
+              return;
+            }
+            this.addTranscriptLine(speaker, transcript);
+            }
+          });
+        }
+      } catch (err) {
+        console.error(`[MediaRecorder] Error processing chunk for ${speaker}:`, err);
+      }
+    };
+    
+    // Explicit error handler for recorder
+    recorder.onerror = (e) => {
+      console.error(`[MediaRecorder] Error for ${speaker}:`, e.error);
+    };
+
+    recorder.start();
+    
+    // Interval to stop and restart so headers are rewritten for the Whisper API
+    const intervalId = setInterval(() => {
+      if (this.isActive && recorder.state === 'recording') {
+        recorder.stop();
+        recorder.start();
+      } else if (!this.isActive) {
+        clearInterval(intervalId);
+        if (recorder.state === 'recording') recorder.stop();
+      }
+    }, 4000);
+    
+    return recorder;
+  }
+
+  // Issue 1: Missing startInteractiveDemo Method
+  startInteractiveDemo() {
+    console.log("[CallManager] Starting interactive demo...");
+    const demoPatient = {
+      id: "DEMO-001",
+      name: "Interactive Demo Patient",
+      severity: "Medium",
+      status: "Active",
+      phone: "+91-0000000000",
+      addictionCategory: "Opioid (Heroin)"
+    };
+    window.CounselFlow.app.switchScreen('call-console');
+    this.startCall(demoPatient);
+  }
+
+  // Live Transcription is now triggered directly by LiveKit track subscriptions
+  initLiveTranscription() {
+     // No-op for now. ASR is initialized dynamically when LiveKit tracks arrive in TrackSubscribed event.
+     console.log('[ASR] Transcription engine armed and waiting for LiveKit audio tracks...');
   }
 
   // ── Socket Audio Relay — activated automatically when WebRTC P2P fails
@@ -754,10 +678,10 @@ class CallManager {
   // Draw WebRTC audio waveforms with FPS capping and visibility checks (Performance #67, UX #46, UX #47)
   drawWaveform(timestamp) {
     if (!this.isActive) {
-    if (this.animationFrame) {
-      cancelAnimationFrame(this.animationFrame);
-      this.animationFrame = null;
-    }
+      if (this.animationFrame) {
+        cancelAnimationFrame(this.animationFrame);
+        this.animationFrame = null;
+      }
       return;
     }
     if (document.hidden) {
@@ -869,7 +793,7 @@ class CallManager {
 
 
   // Begin Tele-Counseling session call
-  async startCall(patient, languageCode, direction = "Outbound", isDemoMode = false) {
+  async startCall(patient, languageCode, direction = "Outbound") {
     if (this.isActive) return;
     
     this.isActive = true;
@@ -884,13 +808,12 @@ class CallManager {
     this.asrRetryCount = 0; // Reset ASR network retry count (Error Handling #4)
     this.iceCandidateQueue = [];
     this.patientAnswered = false;
-    this.patientIsTranscribing = false;
 
-    // Initiate WebRTC Call
-    if (!isDemoMode) {
-      await this.initWebRTC(patient);
-    } else {
-      this.patientAnswered = true;
+    // Initiate LiveKit Call (Replaces WebRTC)
+    try {
+      await this.initLiveKit(patient);
+    } catch (e) {
+      return; // initLiveKit already called endCall() and showed a toast
     }
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
@@ -954,25 +877,23 @@ class CallManager {
       const secs = (this.duration % 60).toString().padStart(2, '0');
       
       document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
+      document.getElementById('patient-cravings').innerText = `${this.activePatient.cravingsIntensity || 0}/10`;
     }, 1000);
 
-    // Initialize Live Transcription when call connects (using Groq Whisper chunking)
-    if (isDemoMode) {
-      console.log('[ASR] Demo mode active. Suppressing live transcription setup.');
-    } else if (!this.isRecording) {
+    // In the new App-to-App LiveKit architecture, the Dashboard acts as an observer.
+    // Transcription is wired up dynamically when remote tracks are subscribed (in initLiveKit).
+    if (!this.isRecording) {
       this.addWarningToTranscriptLog(
         "Recording Consent Denied", 
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
       );
-    } else if (this.localStream) {
-      this.initLiveTranscription();
     } else {
       this.addWarningToTranscriptLog(
-        "Microphone Error",
-        "Could not access microphone stream. Transcription cannot start."
+        "AI Observer Active",
+        "The Dashboard is observing the call. Transcription will start automatically when the patient and counselor speak."
       );
     }
-
+    
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
   }
 
@@ -983,8 +904,14 @@ class CallManager {
     // Log call attempt (Connected) (Phase 2, Solution Scope #2)
     this.logCallAttempt(this.activePatient, this.duration, this.callDirection || "Outbound", "Connected");
 
-    // Copy active transcript to cache and clear (Bug #2)
-    this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript));
+    // Finalize transcripts and push to AI for summarization
+    try {
+      this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript || []));
+    } catch (e) {
+      console.warn("Failed to deep copy transcript, resetting to empty array", e);
+      this.lastSessionTranscript = [];
+    }
+    
     this.#currentTranscript = [];
     
     this.isActive = false;
@@ -999,15 +926,14 @@ class CallManager {
       }
     }
     this.patientSocketId = null;
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
+    if (this.room) {
+      this.room.disconnect();
+      this.room = null;
     }
     if (this.localStream) {
       this.localStream.getTracks().forEach(t => t.stop());
       this.localStream = null;
     }
-    this.patientIsTranscribing = false;
 
      // Stop Whisper Transcribers
      if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
@@ -1165,13 +1091,13 @@ class CallManager {
   }
 
   // Populate line on current visual transcript feed with batched/requestAnimationFrame frames
-  addTranscriptLine(speaker, text, isLocal = true) {
+  addTranscriptLine(speaker, text) {
     if (!text || !text.trim()) return;
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.#currentTranscript.push({ speaker, text, timestamp: time });
     // Relay to patient portal for live transcript feature
-    if (isLocal && this.socket && this.patientSocketId) {
+    if (this.socket && this.patientSocketId) {
       this.socket.emit('transcript-update', {
         to: this.patientSocketId,
         text: text,
@@ -1218,7 +1144,7 @@ class CallManager {
   async playScenarioScript(langKey, targetPatient = null) {
     // Bug #3: Clear old scenario intervals before triggering a new one
     if (this.scenarioInterval) {
-      clearTimeout(this.scenarioInterval);
+      clearInterval(this.scenarioInterval);
     }
     
     const scenario = CALL_SCENARIOS[langKey];
@@ -1253,45 +1179,6 @@ class CallManager {
     };
 
     // Trigger the dynamic recursive timeout sequence
-    this.scenarioInterval = setTimeout(playNextTurn, 1000);
-  }
-
-  // Load and play a dialogue scenario for passive web monitoring of a mobile-initiated call
-  async playScenarioScriptWithoutCallInit(langKey, targetPatient = null) {
-    if (this.scenarioInterval) {
-      clearTimeout(this.scenarioInterval);
-    }
-    
-    const scenario = CALL_SCENARIOS[langKey];
-    if (!scenario) return;
-
-    const patientObj = targetPatient || window.CounselFlow.app.patients.find(p => p.id === scenario.patientId);
-    if (!patientObj) return;
-
-    this.activeScenarioKey = langKey;
-    
-    // Set up canvas waveform
-    this.lastFrameTime = performance.now();
-    this.drawWaveform();
-    
-    const scriptLines = scenario.transcript;
-    this.scenarioIndex = 0;
-
-    const playNextTurn = () => {
-      if (this.isActive) {
-        if (this.scenarioIndex < scriptLines.length) {
-          const line = scriptLines[this.scenarioIndex];
-          this.addTranscriptLine(line.speaker, line.text);
-          this.scenarioIndex++;
-          
-          const nextDelay = Math.max(1500, line.text.length * 60);
-          this.scenarioInterval = setTimeout(playNextTurn, nextDelay);
-        } else {
-          // Stay connected until ended by counselor mobile app
-        }
-      }
-    };
-
     this.scenarioInterval = setTimeout(playNextTurn, 1000);
   }
 

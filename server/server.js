@@ -1,7 +1,3 @@
-const crypto = require('crypto');
-if (!global.crypto) {
-  global.crypto = crypto;
-}
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
@@ -9,108 +5,44 @@ const cors = require('cors');
 const axios = require('axios');
 const http = require('http');
 const path = require('path');
+const crypto = require('crypto');
 const multer = require('multer');
 const FormData = require('form-data');
 const { Server } = require('socket.io');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
-// Validate environment variables on boot
-const REQUIRED_ENV = ['GROQ_API_KEY', 'MONGODB_URI', 'JWT_SECRET'];
-const missingEnv = REQUIRED_ENV.filter(key => {
-  const val = process.env[key];
-  return !val || val === 'your_groq_api_key_here' || val === 'your_gemini_api_key_here';
-});
-if (missingEnv.length > 0) {
-  console.error(`🚨 CRITICAL: Missing or unconfigured required environment variables: ${missingEnv.join(', ')}`);
-  if (process.env.NODE_ENV === 'production') {
-    process.exit(1);
-  }
-}
+const { Patient, CallLog, AuditTrail, Counselor, MedicationLog } = require('./models');
+const { AccessToken } = require('livekit-server-sdk');
+const admin = require('firebase-admin');
+const fs = require('fs');
 
-const { Patient, CallLog, AuditTrail, Counselor } = require('./models');
-
-// JWT Secret and Helpers (HMAC-SHA256 Pure JS implementation)
-const JWT_SECRET = process.env.JWT_SECRET || 'counsel-flow-super-secret-key-2026';
-
-function base64url(str, encoding = 'utf8') {
-  return Buffer.from(str, encoding).toString('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-function base64urlDecode(str) {
-  str = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (str.length % 4) {
-    str += '=';
-  }
-  return Buffer.from(str, 'base64').toString('utf8');
-}
-
-function signJWT(payload) {
-  const header = { alg: 'HS256', typ: 'JWT' };
-  const encodedHeader = base64url(JSON.stringify(header));
-  const encodedPayload = base64url(JSON.stringify({
-    ...payload,
-    exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours expiration
-  }));
-  
-  const signatureInput = `${encodedHeader}.${encodedPayload}`;
-  const signature = crypto.createHmac('sha256', JWT_SECRET)
-    .update(signatureInput)
-    .digest('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-    
-  return `${signatureInput}.${signature}`;
-}
-
-function verifyJWT(token) {
+// Initialize Firebase Admin conditionally
+const firebaseCredsPath = process.env.FIREBASE_CREDENTIALS_PATH || path.join(__dirname, '../google-services.json');
+let fcmInitialized = false;
+if (fs.existsSync(firebaseCredsPath)) {
   try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    
-    const [header, payload, signature] = parts;
-    const signatureInput = `${header}.${payload}`;
-    
-    const expectedSignature = crypto.createHmac('sha256', JWT_SECRET)
-      .update(signatureInput)
-      .digest('base64')
-      .replace(/=/g, '')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_');
-      
-    if (signature !== expectedSignature) {
-      return null;
-    }
-    
-    const decodedPayload = JSON.parse(base64urlDecode(payload));
-    if (decodedPayload.exp && decodedPayload.exp < Math.floor(Date.now() / 1000)) {
-      return null; // Expired
-    }
-    
-    return decodedPayload;
-  } catch (e) {
-    return null;
+    const serviceAccount = JSON.parse(fs.readFileSync(firebaseCredsPath, 'utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    fcmInitialized = true;
+    console.log('✅ Firebase Admin initialized for Push Notifications');
+  } catch (err) {
+    console.error('❌ Failed to initialize Firebase Admin:', err.message);
   }
+} else {
+  console.warn('⚠️ Firebase credentials not found. FCM push notifications will be disabled.');
 }
 
+// JWT authentication middleware placeholder
+// TODO: Replace with real JWT verification when auth is implemented
 const authenticateJWT = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.split(' ')[1];
-    const user = verifyJWT(token);
-    if (user) {
-      req.user = user;
-      return next();
-    }
-  }
-  return res.status(401).json({ error: 'Unauthorized: Invalid or missing token' });
+  // Pass-through for now — no JWT validation configured
+  next();
 };
 
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', 1); // Trust first proxy (ngrok) for rate limiting
 
 // Security middleware to block sensitive files
 app.use((req, res, next) => {
@@ -121,77 +53,42 @@ app.use((req, res, next) => {
   next();
 });
 
-// CORS origin safety check
-const allowedOriginsEnv = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(o => o.trim()) : [];
-
-const isOriginAllowed = (origin) => {
-  if (!origin) return true; // Allow non-browser agents (mobile app, curl, same-origin static assets)
-  if (allowedOriginsEnv.length > 0) {
-    return allowedOriginsEnv.includes(origin);
-  }
-  try {
-    const parsedUrl = new URL(origin);
-    const hostname = parsedUrl.hostname;
-    return (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname.endsWith('.ngrok-free.dev') ||
-      hostname.endsWith('.ngrok.io')
-    );
-  } catch (e) {
-    return false;
-  }
-};
-
 // Serve the main application frontend directly from this server
 app.use(express.static(path.join(__dirname, '../')));
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: (origin, callback) => {
-      if (isOriginAllowed(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
-    },
-    methods: ["GET", "POST"],
-    credentials: true
+    origin: "*", // allow any origin since front-end might run on file:// or another port
+    methods: ["GET", "POST"]
   }
 });
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (isOriginAllowed(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-}));
-app.use(express.json({ limit: '5mb' }));
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
 // Rate limiting setup
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 600, // Reduced from 10000 to defend against basic denial-of-service
+  max: 10000, // Limit each IP to 10000 requests per windowMs to prevent testing blockages
   message: { error: 'Too many requests from this IP, please try again later.' }
 });
 app.use('/api/', apiLimiter);
 
-// Add ngrok bypass header dynamically
+// Add ngrok bypass header to all responses so ngrok doesn't intercept
 app.use((req, res, next) => {
-  if (process.env.NODE_ENV !== 'production' || req.headers.host?.includes('ngrok')) {
-    res.setHeader('ngrok-skip-browser-warning', '1');
-  }
+  res.setHeader('ngrok-skip-browser-warning', '1');
   next();
 });
 
 // CSRF Protection Middleware
 // Require a custom header 'X-Requested-With' for state-changing endpoints
+// Exempt /api/ai/* routes — they authenticate via API key and break with CSRF + ngrok free tier
 app.use((req, res, next) => {
   if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+    // Skip CSRF for AI proxy endpoints (they use API key auth)
+    if (req.path.startsWith('/api/ai/')) {
+      return next();
+    }
     if (req.headers['x-requested-with'] !== 'XMLHttpRequest') {
       return res.status(403).json({ error: 'CSRF token missing or invalid (missing X-Requested-With header)' });
     }
@@ -243,83 +140,8 @@ app.get('/api/ice-servers', (req, res) => {
 
 
 
-// ==========================================
-// AUTHENTICATION API
-// ==========================================
-
-const DEMO_CREDENTIALS = [
-  { roleKey: 'spo', username: 'spo@cbm.gov.in', password: 'CBM@SPOwner24', name: 'Sh. Gurinder Bhullar IAS', staffId: 'STAFF-001' },
-  { roleKey: 'supervisor', username: 'supervisor@cbm.gov.in', password: 'CBM@Supervisor24', name: 'Dr. Rajdeep Singh', staffId: 'STAFF-002' },
-  { roleKey: 'counsellor', username: 'counsellor_amritsar@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Amanpreet Kaur', staffId: 'STAFF-003', district: 'Amritsar' },
-  { roleKey: 'counsellor', username: 'counselor-1', password: 'CBM@Counsellor24', name: 'Dr. Amanpreet Kaur', staffId: 'STAFF-003', district: 'Amritsar' },
-  { roleKey: 'counsellor', username: 'counsellor_jalandhar@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Manpreet Sodhi', staffId: 'STAFF-004', district: 'Jalandhar' },
-  { roleKey: 'counsellor', username: 'counsellor_ludhiana@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Harinder Gill', staffId: 'STAFF-005', district: 'Ludhiana' },
-  { roleKey: 'counsellor', username: 'counsellor_patiala@cbm.gov.in', password: 'CBM@Counsellor24', name: 'Dr. Gurbaksh Singh', staffId: 'STAFF-006', district: 'Patiala' },
-  { roleKey: 'ddrc', username: 'ddrc_amritsar@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Harpreet Grewal', staffId: 'STAFF-007', district: 'Amritsar' },
-  { roleKey: 'ddrc', username: 'ddrc_jalandhar@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Balwinder Singh', staffId: 'STAFF-009', district: 'Jalandhar' },
-  { roleKey: 'ddrc', username: 'ddrc_ludhiana@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Simranjeet Kaur', staffId: 'STAFF-010', district: 'Ludhiana' },
-  { roleKey: 'ddrc', username: 'ddrc_patiala@cbm.gov.in', password: 'CBM@DDRC24', name: 'Dr. Gurdeep Singh', staffId: 'STAFF-011', district: 'Patiala' },
-  { roleKey: 'ditsu', username: 'ditsu@cbm.gov.in', password: 'CBM@DITSU24', name: 'Er. Navneet Sharma', staffId: 'STAFF-008' }
-];
-
-app.post('/api/auth/login', (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
-  }
-  const match = DEMO_CREDENTIALS.find(
-    c => c.username.toLowerCase() === username.trim().toLowerCase() &&
-         c.password === password.trim()
-  );
-  if (match) {
-    const token = signJWT({
-      username: match.username,
-      roleKey: match.roleKey,
-      name: match.name,
-      staffId: match.staffId,
-      district: match.district
-    });
-    return res.json({
-      token,
-      user: {
-        roleKey: match.roleKey,
-        name: match.name,
-        staffId: match.staffId,
-        district: match.district
-      }
-    });
-  }
-  return res.status(401).json({ error: 'Invalid username or password' });
-});
-
-app.post('/api/auth/patient-login', async (req, res) => {
-  const { patientId, name } = req.body;
-  if (!patientId) {
-    return res.status(400).json({ error: 'patientId is required' });
-  }
-  let patientName = name || 'Anonymous Patient';
-  try {
-    const patientObj = await Patient.findOne({ id: patientId });
-    if (patientObj) {
-      patientName = patientObj.name;
-    } else {
-      const newPt = new Patient({ id: patientId, name: patientName });
-      await newPt.save();
-    }
-  } catch (err) {
-    console.warn('[AUTH] Patient DB lookup failed, proceeding with fallback:', err.message);
-  }
-
-  const token = signJWT({
-    patientId: patientId,
-    roleKey: 'patient',
-    name: patientName
-  });
-  return res.json({ token, patientId, name: patientName });
-});
-
 // Connect to MongoDB
-const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/punjabvoice';
+const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/counselflow';
 mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(() => console.log('✅ Connected to MongoDB'))
   .catch(err => {
     console.error('❌ MongoDB Connection Error:', err);
@@ -332,34 +154,48 @@ mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(() => consol
 
 app.get('/api/patients', authenticateJWT, async (req, res) => {
   try {
-    let query = {};
-    if (req.user && req.user.roleKey === 'counsellor') {
-      if (req.user.district) {
-        query = { district: req.user.district };
-      } else {
-        query = { id: '__nonexistent__' };
-      }
-    }
-    const patients = await Patient.find(query);
+    const patients = await Patient.find({});
     res.json(patients);
   } catch (error) {
-    console.error("Error in GET /api/patients:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.get('/api/patients/online', authenticateJWT, (req, res) => {
+// ==========================================
+// AUTHENTICATION API
+// ==========================================
+
+app.post('/api/login', async (req, res) => {
+  console.log('[DEBUG] Incoming login request:', req.body, req.headers);
   try {
-    const onlineIds = Object.keys(patientSockets);
-    res.json({ onlinePatientIds: onlineIds });
+    const { id, role } = req.body;
+    if (!id || !role) {
+      return res.status(400).json({ error: 'Missing id or role' });
+    }
+
+    if (role === 'counselor') {
+      const counselor = await Counselor.findOne({ id });
+      if (counselor) {
+        return res.json({ success: true, name: counselor.name || id, role: 'counselor' });
+      }
+    } else if (role === 'patient') {
+      const patient = await Patient.findOne({ id });
+      if (patient) {
+        return res.json({ success: true, name: patient.name || id, role: 'patient' });
+      }
+    } else {
+      return res.status(400).json({ error: 'Invalid role' });
+    }
+
+    return res.status(401).json({ error: 'Invalid credentials. User not found.' });
   } catch (error) {
-    console.error("Error in GET /api/patients/online:", error);
-    res.status(500).json({ error: error.message });
+    console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Seed endpoint: clears all patients and replaces with provided seed data
-app.post('/api/seed', authenticateJWT, async (req, res) => {
+app.post('/api/seed', async (req, res) => {
   try {
     const { patients } = req.body;
     if (!Array.isArray(patients)) {
@@ -445,6 +281,22 @@ app.get('/api/counselors', authenticateJWT, async (req, res) => {
   try {
     const counselors = await Counselor.find({});
     res.json(counselors);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/counselors/:id/patients', authenticateJWT, async (req, res) => {
+  try {
+    const { id } = req.params;
+    // Find patients where counselorId or assignedCounselor matches the given ID
+    const patients = await Patient.find({
+      $or: [
+        { counselorId: id },
+        { assignedCounselor: id }
+      ]
+    });
+    res.json(patients);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -582,15 +434,89 @@ app.post('/api/audit-trail', authenticateJWT, async (req, res) => {
 });
 
 // ==========================================
+// OPD API
+// ==========================================
+
+app.post('/api/opd/upload', authenticateJWT, async (req, res) => {
+  try {
+    const records = req.body;
+    if (!Array.isArray(records)) {
+      return res.status(400).json({ error: 'Expected an array of OPD records' });
+    }
+    
+    // Process records: create MedicationLog entries and update Patient nextOpdVisitDate
+    let processed = 0;
+    for (const record of records) {
+      if (!record.patientId || !record.date || !record.medicineName) continue;
+      
+      const logId = `OPD-${Date.now()}-${Math.floor(Math.random()*10000)}`;
+      
+      await MedicationLog.create({
+        logId: logId,
+        patientId: record.patientId,
+        date: record.date,
+        medicineName: record.medicineName,
+        quantity: record.quantity || 0,
+        nextVisitDate: record.nextVisitDate || null,
+        uploadedBy: req.user?.id || 'OPD_STAFF'
+      });
+      
+      // Update patient's next visit date if provided
+      if (record.nextVisitDate) {
+        await Patient.updateOne(
+          { id: record.patientId },
+          { $set: { nextOpdVisitDate: record.nextVisitDate } }
+        );
+      }
+      processed++;
+    }
+    
+    res.json({ success: true, processed, message: 'OPD data uploaded successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/opd/logs/:patientId', authenticateJWT, async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const logs = await MedicationLog.find({ patientId }).sort({ date: -1 });
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/opd/defaulters', authenticateJWT, async (req, res) => {
+  try {
+    // A defaulter is someone whose nextOpdVisitDate is less than today's date
+    const today = new Date().toISOString().split('T')[0];
+    const defaulters = await Patient.find({ 
+      nextOpdVisitDate: { $lt: today, $ne: null }
+    });
+    res.json(defaulters);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
 // AI PROXY ENDPOINTS (GROQ)
 // ==========================================
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
+app.post('/api/ai/chat/completions', async (req, res) => {
   try {
-    const apiKey = process.env.GROQ_API_KEY;
+    let apiKey = process.env.GROQ_API_KEY;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const headerKey = req.headers.authorization.split(' ')[1];
+      if (headerKey && headerKey.trim() !== '') {
+        apiKey = headerKey;
+      }
+    }
+    
     if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
+      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured or provided" } });
     }
     
     const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', req.body, {
@@ -607,194 +533,43 @@ app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
   }
 });
 
-app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'), async (req, res) => {
+app.post('/api/ai/audio/transcriptions', upload.single('file'), async (req, res) => {
   try {
-    const apiKey = process.env.GROQ_API_KEY;
+    let apiKey = process.env.GROQ_API_KEY;
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const headerKey = req.headers.authorization.split(' ')[1];
+      if (headerKey && headerKey.trim() !== '') {
+        apiKey = headerKey;
+      }
+    }
+    
     if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
+      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured or provided" } });
     }
     
     if (!req.file) {
       return res.status(400).json({ error: { message: "No file provided" } });
     }
 
-    console.debug(`[ASR Proxy] Received chunk: ${req.file.size} bytes, name: ${req.file.originalname}`);
-
-    const originalName = req.file.originalname || 'chunk.m4a';
-
-    // Rich trilingual domain prompt to guide Whisper vocabulary
-    const domainPrompt =
-      'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
-      'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
-      'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
-      'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
-      'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
-    const promptToUse = req.body.prompt || domainPrompt;
-
-    // Resolve language hint: prioritize request body, fallback to patient preferredLanguage in DB
-    let resolvedLanguage = req.body.language;
-    if ((!resolvedLanguage || resolvedLanguage === 'null' || resolvedLanguage === 'undefined') && req.user) {
-      if (req.user.roleKey === 'patient') {
-        try {
-          const patient = await Patient.findOne({ id: req.user.patientId });
-          if (patient && patient.preferredLanguage) {
-            const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': 'en' };
-            resolvedLanguage = langMap[patient.preferredLanguage] || null;
-          }
-        } catch (dbErr) {
-          console.warn('[ASR Proxy] Failed to lookup patient language:', dbErr.message);
-        }
-      }
-    }
-
-    // ── Helper: build Whisper form data for a given model ──
-    const buildWhisperForm = (model) => {
-      const form = new FormData();
-      form.append('file', req.file.buffer, originalName);
-      form.append('model', model);
-      if (resolvedLanguage && resolvedLanguage !== 'null') {
-        form.append('language', resolvedLanguage);
-      }
-      form.append('prompt', promptToUse);
-      form.append('temperature', '0');
-      form.append('response_format', 'json');
-      return form;
-    };
-
-    // ── Step 1: Primary Whisper transcription (fast turbo model) ──────────
-    let rawText = '';
-    try {
-      const form1 = buildWhisperForm('whisper-large-v3-turbo');
-      const whisperResp = await axios.post(
-        'https://api.groq.com/openai/v1/audio/transcriptions',
-        form1,
-        {
-          headers: { ...form1.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-          timeout: 15000
-        }
-      );
-      rawText = (whisperResp.data?.text || '').trim();
-      console.debug(`[ASR Proxy] Turbo result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-    } catch (turboErr) {
-      console.warn('[ASR Proxy] Turbo model failed:', turboErr.message);
-    }
-
-    // ── Step 1b: Two-pass fallback — retry with full model if turbo gave empty/short ──
-    if (!rawText || rawText.length < 5) {
-      try {
-        console.debug('[ASR Proxy] Turbo result too short, retrying with whisper-large-v3...');
-        const form2 = buildWhisperForm('whisper-large-v3');
-        const fallbackResp = await axios.post(
-          'https://api.groq.com/openai/v1/audio/transcriptions',
-          form2,
-          {
-            headers: { ...form2.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-            timeout: 20000
-          }
-        );
-        const fallbackText = (fallbackResp.data?.text || '').trim();
-        console.debug(`[ASR Proxy] Full model result (${fallbackText.length} chars): "${fallbackText.substring(0, 80)}"`);
-        if (fallbackText.length > rawText.length) {
-          rawText = fallbackText;
-        }
-      } catch (fallbackErr) {
-        console.warn('[ASR Proxy] Full model fallback also failed:', fallbackErr.message);
-      }
-    }
-
-    // ── Server-side hallucination guard ───────────────────────────────────
-    const cleanRawLower = rawText.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
+    const form = new FormData();
+    form.append('file', req.file.buffer, req.file.originalname || 'chunk.webm');
     
-    // Short phrases/words that should only be blocked if they are the EXACT transcript
-    const EXACT_HALLUCINATIONS = [
-      'do not', "don't", 'do not track', 'pata', 'pata ne',
-      'thank you', 'bye bye', 'goodbye', 'see you',
-      'you', 'so', 'the', 'and', 'is', 'it',
-      '...', '. . .', '.   .', 'okay okay okay'
-    ];
-    
-    // Long unique phrases that can be blocked if they appear anywhere
-    const SUBSTRING_HALLUCINATIONS = [
-      "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
-      "hello i'm a 12 year old", "i'm a 12 year old",
-      "thank you for watching", "thanks for watching", "please subscribe",
-      "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
-      "see you in the next video", "see you next time",
-      "लेकिन मेरे में क्यों नहीं होना चाहिए",
-      "तुक बोले गया तब ना बोल तो रहा है",
-      "तो डेस्पोर्ट चेक करना",
-      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
-    ];
-    
-    const isHallucination = 
-      EXACT_HALLUCINATIONS.includes(cleanRawLower) || 
-      SUBSTRING_HALLUCINATIONS.some(h => cleanRawLower.includes(h.toLowerCase()));
+    // Append all other fields from the frontend request
+    Object.keys(req.body).forEach(key => {
+      form.append(key, req.body[key]);
+    });
 
-    if (isHallucination) {
-      console.debug('[ASR Proxy] Server-side hallucination filtered:', rawText);
-      rawText = '';
-    }
-
-    // ── Step 2: LLM post-processing — fix script errors & hallucinations ──────
-    // Only run if there's actual content to clean
-    if (rawText.length > 2) {
-      try {
-        const llmResp = await axios.post(
-          'https://api.groq.com/openai/v1/chat/completions',
-          {
-            model: 'llama-3.1-8b-instant',
-            temperature: 0,
-            max_tokens: 1024,
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'You are a transcript corrector for a Punjab telemedicine counseling session.\n' +
-                  'The speech is a natural mix of English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
-                  'CRITICAL RULES for trilingual correction:\n' +
-                  '1. Punjabi words MUST use Gurmukhi script (ਆਖਰੀ, ਪਰਿਵਾਰ, ਨਸ਼ਾ) — NEVER Devanagari for Punjabi words.\n' +
-                  '2. Hindi words MUST use Devanagari script (आख़री, परिवार, नशा) — NEVER Gurmukhi for Hindi words.\n' +
-                  '3. English words stay in English — DO NOT translate or transliterate.\n' +
-                  '4. If a word mixes scripts incorrectly (e.g., half Gurmukhi half Devanagari), fix to the correct script.\n' +
-                  '5. Remove ONLY: "um", "uh", repeated words, YouTube phrases ("subscribe", "thank you for watching"), silence artifacts.\n' +
-                  '6. If unclear or the entire input is noise/hallucination, return EMPTY STRING "" — DO NOT guess.\n' +
-                  '7. Do NOT translate. Do NOT add words. Do NOT summarise.\n' +
-                  '8. Do NOT discard short, normal conversational responses like "yes", "no", "okay", "hello", "ji", "haan", "ठीक है", "नहीं", "ਪਤਾ ਨਹੀਂ", "ਠੀਕ ਹੈ ਜੀ", "ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ", or similar replies. Only return empty string if the input is a known Whisper hallucination (like "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe") or completely unintelligible noise.\n' +
-                  'Return ONLY the corrected transcript, nothing else.'
-              },
-              {
-                role: 'user',
-                content: `Transcript: "${rawText}"`
-              }
-            ]
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 12000
-          }
-        );
-
-        const cleaned = llmResp.data?.choices?.[0]?.message?.content?.trim();
-        if (cleaned !== undefined) {
-          // Strip any wrapping quotes the LLM might have added
-          rawText = cleaned.replace(/^["']|["']$/g, '');
-        }
-      } catch (llmErr) {
-        // LLM post-processing is best-effort — fall back to raw Whisper text
-        console.warn('[ASR Proxy] LLM post-processing failed, using raw Whisper output:', llmErr.message);
+    const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+      headers: {
+        ...form.getHeaders(),
+        'Authorization': `Bearer ${apiKey}`
       }
-    }
+    });
 
-    res.json({ text: rawText });
-
+    res.json(response.data);
   } catch (error) {
-    const status = error.response?.status || 500;
-    const data = error.response?.data || { error: { message: error.message } };
-    console.error(`[ASR Proxy] Error (HTTP ${status}):`, data);
-    res.status(status).json(data);
+    console.error("AI Proxy Error (audio):", error.response?.data || error.message);
+    res.status(error.response?.status || 500).json(error.response?.data || { error: { message: error.message } });
   }
 });
 
@@ -802,11 +577,19 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
 // GEMINI AI PROXY ENDPOINT
 // ==========================================
 
-app.post('/api/ai/gemini/chat', authenticateJWT, async (req, res) => {
+app.post('/api/ai/gemini/chat', async (req, res) => {
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
+    let apiKey = process.env.GEMINI_API_KEY;
+    // Allow frontend to pass the key via Authorization header
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const headerKey = req.headers.authorization.split(' ')[1];
+      if (headerKey && headerKey.trim() !== '') {
+        apiKey = headerKey;
+      }
+    }
+
     if (!apiKey || apiKey === 'your_gemini_api_key_here') {
-      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured on the server" } });
+      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured or provided" } });
     }
 
     // Transform OpenAI-style messages to Gemini's contents format
@@ -888,9 +671,6 @@ const counselorSockets = {}; // counselorId (or 'counselor') -> socketId
 // relayPairs[socketIdA] = socketIdB  and  relayPairs[socketIdB] = socketIdA
 const relayPairs = {};
 
-// Active call pairs: tracks bidirectional mapping between counselor and patient sockets
-const activeCallPairs = {};
-
 io.on('connection', (socket) => {
   console.log(`⚡ Socket connected: ${socket.id}`);
 
@@ -909,52 +689,42 @@ io.on('connection', (socket) => {
   });
 
   // 2. Counselor initiates a call to a patient (sends WebRTC Offer)
-  socket.on('call-user', async (data) => {
+  socket.on('call-user', (data) => {
     // data = { to: 'patientId', offer: RTCSessionDescriptionInit, callerInfo: { name, avatar } }
-    const sender = connectedUsers[socket.id];
-    if (sender && sender.role === 'counselor') {
-      const counselorObj = DEMO_CREDENTIALS.find(c => c.username.toLowerCase() === sender.id.toLowerCase());
-      if (counselorObj && counselorObj.district) {
-        try {
-          const patientObj = await Patient.findOne({ id: data.to });
-          if (!patientObj || patientObj.district !== counselorObj.district) {
-            console.log(`❌ Call blocked: Counselor ${sender.id} (${counselorObj.district}) tried to call patient ${data.to} (${patientObj ? patientObj.district : 'No district'})`);
-            socket.emit('call-failed', { reason: 'district-mismatch' });
-            return;
-          }
-        } catch (dbErr) {
-          console.error('[SOCKET] Patient lookup failed during call validation:', dbErr);
-        }
-      }
-    }
-
-    const targetSocket = patientSockets[data.to];
+    const targetSocket = patientSockets[data.to] || counselorSockets[data.to] || counselorSockets['counselor'];
     if (targetSocket) {
       console.log(`📞 Counselor calling patient ${data.to}`);
-      
-      // Store the active call mapping
-      activeCallPairs[socket.id] = targetSocket;
-      activeCallPairs[targetSocket] = socket.id;
-
       io.to(targetSocket).emit('call-made', {
         offer: data.offer,
         socket: socket.id,
         callerInfo: data.callerInfo || { name: 'Counselor' }
       });
-
-      // Notify all counselor web dashboards that a call has started
-      Object.keys(connectedUsers).forEach(sid => {
-        const user = connectedUsers[sid];
-        if (user.role === 'counselor' && sid !== socket.id) {
-          io.to(sid).emit('counselor-call-started', {
+      // Broadcast to all connected clients so dashboards can join LiveKit to transcribe
+      if (data.offer && (data.offer.roomName || data.offer.sdp)) {
+        io.emit('dashboard-observe-call', {
+            roomName: data.offer.roomName || data.offer.sdp,
             patientId: data.to,
-            callerSocketId: socket.id
-          });
-        }
-      });
+            counselorId: connectedUsers[socket.id] ? connectedUsers[socket.id].id : 'Unknown'
+        });
+      }
     } else {
       console.log(`⚠️ Patient ${data.to} is not online.`);
       socket.emit('call-failed', { reason: 'patient-offline' });
+    }
+  });
+
+  // 2b. Web Dashboard initiates handoff to Counselor Mobile App
+  socket.on('handoff-call', (data) => {
+    const targetSocket = counselorSockets[data.to];
+    if (targetSocket) {
+      console.log(`📱 Web Dashboard handing off call to Counselor Mobile ${data.to}`);
+      io.to(targetSocket).emit('handoff-call', {
+        socket: socket.id,
+        roomName: data.roomName,
+        patientName: data.patientName
+      });
+    } else {
+      console.log(`⚠️ Counselor Mobile ${data.to} is not online for handoff.`);
     }
   });
 
@@ -965,16 +735,6 @@ io.on('connection', (socket) => {
     io.to(data.to).emit('answer-made', {
       socket: socket.id,
       answer: data.answer
-    });
-
-    // Notify all counselor web dashboards that the call connected
-    Object.keys(connectedUsers).forEach(sid => {
-      const user = connectedUsers[sid];
-      if (user.role === 'counselor' && sid !== data.to) {
-        io.to(sid).emit('counselor-call-connected', {
-          patientSocketId: socket.id
-        });
-      }
     });
   });
 
@@ -992,56 +752,18 @@ io.on('connection', (socket) => {
   socket.on('reject-call', (data) => {
     // data = { to: 'counselorSocketId' }
     console.log(`❌ Patient rejected call from counselor ${data.to}`);
-    
-    // Cleanup active call pairing
-    const peer = activeCallPairs[socket.id] || data.to;
-    if (peer) {
-      delete activeCallPairs[peer];
-    }
-    delete activeCallPairs[socket.id];
-
     io.to(data.to).emit('call-rejected', {
       socket: socket.id
-    });
-
-    // Notify all counselor web dashboards that the call was rejected
-    Object.keys(connectedUsers).forEach(sid => {
-      const user = connectedUsers[sid];
-      if (user.role === 'counselor' && sid !== data.to) {
-        io.to(sid).emit('counselor-call-ended');
-      }
     });
   });
 
   // 6. Either party ends the call
   socket.on('end-call', (data) => {
-    // data = { to: 'targetSocketId', toPatientId: 'patientId' }
-    let target = data.to;
-    if (!target && data.toPatientId) {
-      target = patientSockets[data.toPatientId];
+    // data = { to: 'targetSocketId' }
+    if (data.to) {
+      console.log(`🛑 Call ended. Notifying ${data.to}`);
+      io.to(data.to).emit('call-ended');
     }
-    // Fallback lookup using activeCallPairs
-    if (!target || !connectedUsers[target]) {
-      target = activeCallPairs[socket.id];
-    }
-
-    if (target) {
-      console.log(`🛑 Call ended. Notifying peer ${target}`);
-      io.to(target).emit('call-ended');
-      
-      // Cleanup active call pairing
-      delete activeCallPairs[target];
-      delete activeCallPairs[socket.id];
-    }
-
-    // Notify all counselor web dashboards that the call ended
-    Object.keys(connectedUsers).forEach(sid => {
-      const user = connectedUsers[sid];
-      if (user.role === 'counselor' && sid !== socket.id && sid !== target) {
-        io.to(sid).emit('counselor-call-ended');
-      }
-    });
-
     // Cleanup relay pair if exists
     if (relayPairs[socket.id]) {
       delete relayPairs[relayPairs[socket.id]];
@@ -1070,28 +792,6 @@ io.on('connection', (socket) => {
     if (data.to) {
       io.to(data.to).emit('transcript-update', { text: data.text, sender: data.sender });
     }
-
-    // Broadcast transcript-update to all counselor web dashboards
-    Object.keys(connectedUsers).forEach(sid => {
-      const user = connectedUsers[sid];
-      if (user.role === 'counselor' && sid !== socket.id && sid !== data.to) {
-        io.to(sid).emit('counselor-transcript-update', {
-          text: data.text,
-          sender: data.sender
-        });
-      }
-    });
-  });
-
-  socket.on('chat-message', (data) => {
-    const { to, message, sender } = data;
-    if (to) {
-      io.to(to).emit('chat-message', { message, sender, timestamp: Date.now() });
-    }
-  });
-
-  socket.on('log-message', (data) => {
-    console.log(`[CLIENT LOG] [${data.level?.toUpperCase() || 'INFO'}] ${data.message}`);
   });
 
   // 8. Relay incoming audio chunk to the other party (binary data pass-through)
@@ -1126,16 +826,6 @@ io.on('connection', (socket) => {
   // Disconnect handler
   socket.on('disconnect', () => {
     console.log(`🔴 Socket disconnected: ${socket.id}`);
-    
-    // Automatically notify active peer if socket was in activeCallPairs
-    const peer = activeCallPairs[socket.id];
-    if (peer) {
-      console.log(`🔌 Active peer disconnected. Notifying peer ${peer}`);
-      io.to(peer).emit('call-ended');
-      delete activeCallPairs[peer];
-      delete activeCallPairs[socket.id];
-    }
-
     // Cleanup relay pair
     if (relayPairs[socket.id]) {
       io.to(relayPairs[socket.id]).emit('audio-relay-stop');
@@ -1150,20 +840,88 @@ io.on('connection', (socket) => {
         delete counselorSockets[user.id];
       }
       delete connectedUsers[socket.id];
-
-      // Notify other counselors that a call might have ended due to disconnect
-      Object.keys(connectedUsers).forEach(sid => {
-        const otherUser = connectedUsers[sid];
-        if (otherUser.role === 'counselor' && sid !== socket.id) {
-          io.to(sid).emit('counselor-call-ended');
-        }
-      });
     }
   });
-
 });
 
 
+
+// ==========================================
+// LIVEKIT & FCM (NEW SFU & PUSH ARCHITECTURE)
+// ==========================================
+
+// Endpoint to generate a LiveKit token for a room
+app.post('/api/livekit/token', authenticateJWT, async (req, res) => {
+  const { roomName, participantName, isCounselor } = req.body;
+
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    return res.status(500).json({ error: 'LiveKit API keys not configured in .env' });
+  }
+
+  if (!roomName || !participantName) {
+    return res.status(400).json({ error: 'roomName and participantName are required' });
+  }
+
+  try {
+    const at = new AccessToken(apiKey, apiSecret, {
+      identity: participantName,
+    });
+    at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
+
+    const jwtToken = await at.toJwt();
+    res.json({ 
+      token: jwtToken,
+      url: process.env.LIVEKIT_URL || 'wss://ai-assistant-ommd272n.livekit.cloud'
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to trigger a push notification to a patient device
+app.post('/api/livekit/notify-call', authenticateJWT, async (req, res) => {
+  const { fcmToken, roomName, callerName } = req.body;
+
+  if (!fcmInitialized) {
+    return res.status(500).json({ error: 'Firebase Admin not initialized. Check credentials.' });
+  }
+
+  if (!fcmToken) {
+    return res.status(400).json({ error: 'fcmToken is required' });
+  }
+
+  try {
+    const message = {
+      notification: {
+        title: 'Incoming Call',
+        body: `${callerName || 'Your Counselor'} is calling you.`
+      },
+      data: {
+        type: 'incoming_call',
+        roomName: roomName || 'default_room'
+      },
+      token: fcmToken
+    };
+
+    const response = await admin.messaging().send(message);
+    res.json({ success: true, messageId: response });
+  } catch (err) {
+    console.error('Error sending push notification:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Global Error Handler to prevent crashes from bad JSON payloads
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
+    console.error('Bad JSON Payload caught:', err.message);
+    return res.status(400).send({ error: 'Invalid JSON payload sent.' });
+  }
+  next();
+});
 
 // ==========================================
 // START SERVER

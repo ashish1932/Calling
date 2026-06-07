@@ -1702,11 +1702,4 @@ header {
   outline: none;
   border-color: var(--accent-blue);
 }
-#btn-quick-call,
-#btn-call-start,
-#btn-detail-start-session,
-.btn-queue-call-trigger,
-.btn-call-trigger {
-  display: none !important;
-}
 

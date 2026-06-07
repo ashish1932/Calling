@@ -175,12 +175,16 @@ server.on('upgrade', (req, clientSocket, head) => {
 
     backendSocket.on('error', (err) => {
       console.error('[WS Proxy] Backend WebSocket error:', err.message);
-      clientSocket.destroy();
+      if (!clientSocket.destroyed) clientSocket.destroy();
     });
 
-    clientSocket.on('error', () => backendSocket.destroy());
-    backendSocket.pipe(clientSocket);
-    clientSocket.pipe(backendSocket);
+    clientSocket.on('error', (err) => {
+      console.error('[WS Proxy] Client WebSocket error:', err.message);
+      if (!backendSocket.destroyed) backendSocket.destroy();
+    });
+
+    backendSocket.pipe(clientSocket).on('error', () => {});
+    clientSocket.pipe(backendSocket).on('error', () => {});
   }
 });
 

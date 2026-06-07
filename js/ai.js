@@ -19,6 +19,9 @@ class AIOrchestrator {
     };
 
     if (provider === 'gemini') {
+      if (window.CounselFlow.CONFIG.GEMINI_API_KEY) {
+        headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GEMINI_API_KEY}`;
+      }
       return {
         endpoint: `${window.CounselFlow.API_BASE}/ai/gemini/chat`,
         headers,
@@ -27,6 +30,10 @@ class AIOrchestrator {
       };
     }
 
+    // Default: Groq
+    if (window.CounselFlow.CONFIG.GROQ_API_KEY) {
+      headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GROQ_API_KEY}`;
+    }
     return {
       endpoint: `${window.CounselFlow.API_BASE}/ai/chat/completions`,
       headers,
@@ -311,66 +318,26 @@ The JSON object must have EXACTLY these fields:
   async transcribeAudioChunkAsync(audioBlob, languageCode = 'en') {
 
     // Skip sending if the audio chunk is too small (prevents 400 Bad Requests and reduces hallucinations on silence)
-    if (audioBlob.size < 3000) return null;
-
-    // ── Client-side Voice Activity Detection (VAD) ──────────────────────
-    // Decode the audio and check RMS energy; skip silent chunks to prevent
-    // Whisper from hallucinating on ambient noise / silence.
-    try {
-      const vadCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const arrayBuf = await audioBlob.arrayBuffer();
-      const audioBuf = await vadCtx.decodeAudioData(arrayBuf);
-      const samples = audioBuf.getChannelData(0);
-      let sumSquares = 0;
-      for (let i = 0; i < samples.length; i++) {
-        sumSquares += samples[i] * samples[i];
-      }
-      const rms = Math.sqrt(sumSquares / samples.length);
-      vadCtx.close();
-      // RMS below 0.005 ≈ silence / ambient room noise — skip this chunk
-      if (rms < 0.005) {
-        console.debug('[ASR/VAD] Chunk is silence (RMS=' + rms.toFixed(5) + '), skipping.');
-        return null;
-      }
-    } catch (vadErr) {
-      // If VAD fails (unsupported codec, etc.), proceed with transcription anyway
-      console.warn('[ASR/VAD] VAD check failed, sending chunk anyway:', vadErr.message);
-    }
+    if (audioBlob.size < 1000) return null;
 
     try {
       const formData = new FormData();
       // Groq Whisper supports flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
       formData.append("file", audioBlob, "chunk.webm");
-      // whisper-large-v3-turbo: same multilingual quality, ~2x faster latency
       formData.append("model", "whisper-large-v3-turbo");
+      // Force language to prevent hallucinations in other languages (like Hungarian or Spanish)
+      let whisperLang = 'en';
+      if (languageCode.startsWith('hi')) whisperLang = 'hi';
+      else if (languageCode.startsWith('pa')) whisperLang = 'pa';
+      formData.append("language", whisperLang);
+      
       formData.append("response_format", "json");
-      formData.append("temperature", "0");
-
-      // ── Smart language hinting ─────────────────────────────────────
-      // Only pass a language hint when we're confident of the dominant language.
-      // Whisper auto-detect works well for English but benefits from hints
-      // for Indic languages. Map BCP-47 codes to ISO-639-1.
-      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': null };
-      const langHint = langMap[languageCode] || null;
-      if (langHint) {
-        formData.append("language", langHint);
-      }
-
-      // Rich trilingual domain prompt — gives Whisper vocabulary hints for
-      // medical/counseling terminology in English, Hindi, and Punjabi
-      const domainPrompt =
-        'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
-        'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
-        'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
-        'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
-        'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
-      formData.append("prompt", domainPrompt);
-
+      // Ask Whisper to not transcribe if the audio is likely silence
+      // (Removed hardcoded prompt and temperature per user request)
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
-
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",
         headers: headers,

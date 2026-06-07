@@ -4,10 +4,6 @@
   "description": "",
   "main": "build.js",
   "scripts": {
-    "start": "node serve.js",
-    "dev": "node serve.js",
-    "build": "node build.js",
-    "server": "node server/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -20,14 +16,15 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^7.1.5",
+    "firebase-admin": "^13.10.0",
     "form-data": "^4.0.5",
+    "livekit-server-sdk": "^2.15.4",
     "mongoose": "^9.6.2",
     "multer": "^2.1.1",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
+    "puppeteer": "^25.1.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "esbuild": "^0.20.0",
-    "puppeteer": "^25.1.0"
+    "esbuild": "^0.20.0"
   }
 }

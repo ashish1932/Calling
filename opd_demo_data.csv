@@ -1,0 +1,6 @@
+Patient ID,Date of Visit,Medicine Given,Quantity,Next Scheduled Visit
+PAT-101,2026-06-01,Buprenorphine,5,2026-06-08
+PAT-102,2026-06-02,Methadone,10,2026-06-12
+PAT-103,2026-06-03,Naltrexone,2,2026-06-05
+PAT-104,2026-06-04,Buprenorphine,7,2026-06-11
+PAT-105,2026-06-05,Diazepam,4,2026-06-19

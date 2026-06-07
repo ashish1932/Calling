@@ -25,7 +25,7 @@ window.CounselFlow.CONFIG = {
   INACTIVITY_LIMIT_MS: 2 * 60 * 60 * 1000, // 2 hours
   ASR_MAX_RETRY_COUNT: 3,
   ASR_RETRY_DELAY_MS: 3000,
-  ENABLE_REAL_CALLS: false, // Set false for simulation/demo mode — no real calls placed
+  ENABLE_REAL_CALLS: true, // Set false for simulation/demo mode — no real calls placed
   STATUSES: {
     ACTIVE: 'Active',
     MONITORED: 'Monitored',
@@ -1220,6 +1220,19 @@ const ROLES = {
     canExportAll: true,
     canBulkDeleteLogs: true,
     description: 'State Admin. Highest authority with full platform control, monitoring, user governance, and security configuration.'
+  },
+  'opd_staff': {
+    label: 'OPD Medication Staff',
+    emoji: '💊',
+    color: 'var(--accent-green)',
+    allowedScreens: ['opd'],
+    canViewPII: true,
+    canDeleteTranscript: false,
+    canResolveEscalation: false,
+    escalationLevels: [],
+    canViewAuditTrail: false,
+    canExportAll: false,
+    description: 'Upload and manage daily medication dispensation records for outpatients.'
   }
 };
 
@@ -1325,6 +1338,13 @@ const DEMO_CREDENTIALS = [
     password: 'CBM@DITSU24',
     name:     'Er. Navneet Sharma',
     staffId:  'STAFF-008'
+  },
+  {
+    roleKey:  'opd_staff',
+    username: 'opd@cbm.gov.in',
+    password: 'CBM@OPD24',
+    name:     'OPD Coordinator',
+    staffId:  'STAFF-012'
   }
 ];
 
