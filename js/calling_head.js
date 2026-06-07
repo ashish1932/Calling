@@ -289,8 +289,8 @@ class CallManager {
                     "ਹਾ", "ਜੀਹ", "ਠੀਕ", "ਓਹ", "ਅਰੇ",
                     "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
                     // Hindi short-word hallucinations (Devanagari)
-                    "हूँ", "हैं", "अरे", "ओह",
-                    "कर दो", "झाल", "अलवूँ", "जरूर जो",
+                    "अरे", "ओह",
+                    "झाल", "अलवूँ", "जरूर जो",
                     // Romanized Hindi/Punjabi hallucinations
                     "namaste", "namaste ji", "kya haal", "haan ji", "ji haan",
                     "theek hai", "achha", "hmm", "haan",

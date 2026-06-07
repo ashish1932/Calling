@@ -622,15 +622,11 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
 
     const originalName = req.file.originalname || 'chunk.m4a';
 
-    // Rich trilingual domain prompt to guide Whisper vocabulary
     const domainPrompt =
-      'This is an official audio recording of a counselor talking with a patient about drug addiction recovery and medical treatment in Punjab. ' +
-      'The speakers talk in a mix of Punjabi (Gurmukhi), Hindi (Devanagari), and English. ' +
-      'CRITICAL SCRIPT RULES: Hindi MUST be written in Devanagari script (हिंदी). NEVER output Romanized Hindi (e.g., "namaste", "theek hai", "haan ji") — those are WRONG. ' +
-      'Punjabi MUST be written in Gurmukhi script (ਪੰਜਾਬੀ). NEVER output Romanized Punjabi. ' +
-      'Hindi words: नशा, दवाई, इलाज, परिवार, सेहत, ठीक, मदद, मुक्ति, गोली, अस्पताल, डॉक्टर, हैं, है, हूँ, करो, दो, जाओ, आओ. ' +
-      'Punjabi words: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਗੋਲੀ, ਹਸਪਤਾਲ, ਡਾਕਟਰ, ਹਾਂ, ਜੀ, ਨਹੀਂ, ਕਰੋ. ' +
-      'English words: OOAT clinic, medicine, treatment, doctor, patient, health, recovery, counseling. ' +
+      'Official telemedicine counseling recording in Punjab. ' +
+      'CRITICAL: Hindi must be Devanagari (e.g., नमस्ते, ठीक, मदद, हैं, है, हूँ). NEVER Romanize Hindi. ' +
+      'Punjabi must be Gurmukhi (e.g., ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਠੀਕ, ਮਦਦ). NEVER Romanize Punjabi. ' +
+      'English in Latin script. ' +
       'Please transcribe exactly what is spoken in the original language and script. Do not translate. Do NOT Romanize. Keep stutters if meaningful, otherwise clean up.';
     const promptToUse = req.body.prompt || domainPrompt;
 

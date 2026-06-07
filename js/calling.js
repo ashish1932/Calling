@@ -444,7 +444,7 @@ class CallManager {
                     "thank you", "bye bye", "goodbye", "see you", "okay okay okay",
                     "you", "so", "the", "and", "is", "it",
                     "ਹਾ", "ਜੀਹ", "ਓਹ", "ਅਰੇ", "ਸੁਣੋ", // meaningless fillers
-                    "हूँ", "हैं", "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"
+                    "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"  // removed "हूँ" and "हैं" — they are real Hindi words
                   ];
 
                   // Long unique phrases that can be blocked if they appear anywhere
