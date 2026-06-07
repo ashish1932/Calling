@@ -347,8 +347,8 @@ export default function App() {
         };
 
         const processAudioChunk = async (uri, loopId, maxDb) => {
-          // Skip silent chunks to save API costs & requests (threshold: -55 dB)
-          if (maxDb > -160 && maxDb < -55) {
+          // Skip silent chunks to save API costs & requests (threshold: -65 dB)
+          if (maxDb > -160 && maxDb < -65) {
             console.log(`[Mobile ASR] Skipping silent chunk (max volume: ${maxDb} dB)`);
             return;
           }
