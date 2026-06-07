@@ -1254,7 +1254,7 @@ export default function App() {
                 <Text style={styles.cardHeader}>Your Assigned Counselor</Text>
                 <View style={styles.counselorRow}>
                   <View style={styles.avatar}>
-                    <Image source={require('./assets/logo.png')} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                    <Image source={require('./assets/avatar.png')} style={{ width: 44, height: 44, borderRadius: 22 }} />
                   </View>
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={styles.counselorName}>{callerName}</Text>
@@ -1354,7 +1354,7 @@ export default function App() {
       {uiState === 'incoming' && (
         <View style={styles.fullscreenCall}>
           <View style={styles.avatarLarge}>
-            <Image source={require('./assets/logo.png')} style={{ width: 110, height: 110, borderRadius: 55 }} />
+            <Image source={require('./assets/avatar.png')} style={{ width: 110, height: 110, borderRadius: 55 }} />
           </View>
           <Text style={styles.incomingTitle}>{callerName}</Text>
           <Text style={styles.incomingSubtitle}>Incoming Counselor Call...</Text>
