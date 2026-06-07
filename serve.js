@@ -118,8 +118,20 @@ const server = http.createServer((req, res) => {
 
   // Static file serving
   const requestPath = req.url.split('?')[0]; // Strip query strings
-  const filePath = resolveStaticPath(requestPath);
-  const fullPath   = path.join(ROOT, filePath);
+  let filePath = resolveStaticPath(requestPath);
+  if (filePath.startsWith('/')) filePath = filePath.slice(1);
+  const normalizedRequestedPath = path.normalize(filePath);
+  if (normalizedRequestedPath.startsWith('..' + path.sep) || normalizedRequestedPath === '..') {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return;
+  }
+  const fullPath   = path.join(ROOT, normalizedRequestedPath);
+  if (!fullPath.startsWith(ROOT + path.sep) && fullPath !== ROOT) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return;
+  }
   const ext        = path.extname(fullPath);
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 

@@ -58,8 +58,27 @@ const mediaDevices = new Proxy({}, {
   }
 });
 
-// Backend URL — all traffic (signaling + audio relay) goes through this single ngrok tunnel
-export const SERVER_URL = 'https://altitude-quintuple-compile.ngrok-free.dev';
+const getServerUrl = () => {
+  if (process.env.EXPO_PUBLIC_SERVER_URL) {
+    return process.env.EXPO_PUBLIC_SERVER_URL;
+  }
+  if (typeof window !== 'undefined' && window.CounselFlow && window.CounselFlow.API_BASE) {
+    const apiBase = window.CounselFlow.API_BASE;
+    return apiBase.replace(/\/api$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location && window.location.origin) {
+    return window.location.origin;
+  }
+  return 'https://altitude-quintuple-compile.ngrok-free.dev';
+};
+
+export let SERVER_URL = getServerUrl();
+
+export function setServerUrl(url) {
+  if (url) {
+    SERVER_URL = url.replace(/\/$/, ''); // strip trailing slash
+  }
+}
 
 class WebRTCService {
   constructor() {

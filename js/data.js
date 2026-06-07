@@ -2,34 +2,7 @@
 
 window.CounselFlow = window.CounselFlow || {};
 
-// Global secure fetch wrapper to inject JWT, CSRF (X-Requested-With), and Ngrok headers automatically
-(() => {
-  const originalFetch = window.fetch;
-  window.fetch = async function (url, options = {}) {
-    options.headers = options.headers || {};
-    
-    // Add CSRF validation header for state-changing methods
-    const method = (options.method || 'GET').toUpperCase();
-    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
-      if (!options.headers['X-Requested-With'] && !options.headers['x-requested-with']) {
-        options.headers['X-Requested-With'] = 'XMLHttpRequest';
-      }
-    }
-    
-    // Add Ngrok bypass header
-    if (!options.headers['ngrok-skip-browser-warning']) {
-      options.headers['ngrok-skip-browser-warning'] = '1';
-    }
-    
-    // Add JWT authorization header
-    const token = window.localStorage.getItem('counseling_logged_in_token');
-    if (token && !options.headers['Authorization'] && !options.headers['authorization']) {
-      options.headers['Authorization'] = `Bearer ${token}`;
-    }
-    
-    return originalFetch(url, options);
-  };
-})();
+
 
 // Centralized Configuration and Environment variables (Architecture #44, Code Quality #7)
 window.CounselFlow.CONFIG = {
@@ -971,7 +944,7 @@ window.CounselFlow.API_BASE = (() => {
 
 const API_BASE = window.CounselFlow.API_BASE;
 
-// Inject ngrok bypass header into all fetch requests targeting our API
+// Inject headers into all fetch requests targeting our API
 const originalFetch = window.fetch;
 window.fetch = async function(resource, config) {
   if (typeof resource === 'string' && resource.includes(API_BASE)) {
@@ -983,6 +956,10 @@ window.fetch = async function(resource, config) {
     } else {
       config.headers['ngrok-skip-browser-warning'] = '1';
       config.headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+    const token = window.localStorage.getItem('counseling_logged_in_token');
+    if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
+      config.headers['Authorization'] = `Bearer ${token}`;
     }
   }
   return originalFetch(resource, config);
@@ -1388,13 +1365,17 @@ async function generateEventHash(eventObj) {
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
     } catch (e) {
-      console.warn("crypto.subtle failed, falling back to XXTEA hash", e);
+      console.warn("crypto.subtle failed, falling back to simple hash", e);
     }
   }
   
-  // Fallback for non-HTTPS origins where crypto.subtle is undefined
-  const signed = xxtea_encrypt(payload, window.CounselFlow.CONFIG.ENCRYPTION_KEY);
-  return btoa(unescape(encodeURIComponent(signed))).slice(0, 32);
+  const hash = 0;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16).padStart(2, '0').repeat(16).slice(0, 32);
 }
 
 async function getAuditTrail() {

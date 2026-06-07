@@ -119,7 +119,7 @@ class CallManager {
           await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
           window.CounselFlow.writeAuditEvent(
             'ICE_CANDIDATE_RECEIVED',
-            this.currentPatientId,
+            this.activePatient ? this.activePatient.id : (this.patientSocketId || 'unknown'),
             null,
             window.CounselFlow.getActiveRole(),
             `Received ICE candidate from ${data.source || 'patient'}`
@@ -754,10 +754,10 @@ class CallManager {
   // Draw WebRTC audio waveforms with FPS capping and visibility checks (Performance #67, UX #46, UX #47)
   drawWaveform(timestamp) {
     if (!this.isActive) {
-      if (this.animationFrame) {
-        cancelAnimationFrame(this.animationFrame);
-        this.animationFrame = null;
-      }
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = null;
+    }
       return;
     }
     if (document.hidden) {

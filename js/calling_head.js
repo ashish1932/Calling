@@ -21,6 +21,7 @@ class CallManager {
     
     this.scenarioInterval = null;
     this.scenarioIndex = 0;
+    this.isRelayMode = false;
     
     this.lastSessionTranscript = []; // Cache for post-call summaries (Bug #2)
     this.asrSupportWarned = false; // ASR browser support warning flag (Error Handling #4)
@@ -62,7 +63,7 @@ class CallManager {
 
       this.socket.on('connect', () => {
         console.log('[WebRTC] Connected to Signaling Server:', this.socket.id);
-        this.socket.emit('register', { role: 'counselor', id: 'counselor-1' });
+        this.socket.emit('register', { role: 'counselor', id: 'counsellor_amritsar@cbm.gov.in' });
       });
 
       this.socket.on('answer-made', async (data) => {
@@ -663,8 +664,8 @@ class CallManager {
     this.#currentTranscript = [];
     
     this.isActive = false;
+    clearTimeout(this.scenarioInterval);
     clearInterval(this.timerInterval);
-    clearInterval(this.scenarioInterval);
     this.clearCanvas();
     
     // End WebRTC Connection ΓÇö use patientSocketId (not patient.id) for socket routing
@@ -857,7 +858,7 @@ class CallManager {
   async playScenarioScript(langKey, targetPatient = null) {
     // Bug #3: Clear old scenario intervals before triggering a new one
     if (this.scenarioInterval) {
-      clearInterval(this.scenarioInterval);
+      clearTimeout(this.scenarioInterval);
     }
     
     const scenario = CALL_SCENARIOS[langKey];
@@ -1006,7 +1007,22 @@ class CallManager {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
     }
+    if (this.isRelayMode) {
+      this.stopSocketAudioRelay();
+    }
     this.clearCanvas();
+  }
+
+  startSocketAudioRelay() {
+    if (!this.patientSocketId || !this.localStream) return;
+    this.isRelayMode = true;
+    if (this.socket) {
+      this.socket.emit('audio-relay-start', { to: this.patientSocketId });
+    }
+  }
+
+  stopSocketAudioRelay() {
+    this.isRelayMode = false;
   }
 }
 

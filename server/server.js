@@ -1083,6 +1083,13 @@ io.on('connection', (socket) => {
     });
   });
 
+  socket.on('chat-message', (data) => {
+    const { to, message, sender } = data;
+    if (to) {
+      io.to(to).emit('chat-message', { message, sender, timestamp: Date.now() });
+    }
+  });
+
   socket.on('log-message', (data) => {
     console.log(`[CLIENT LOG] [${data.level?.toUpperCase() || 'INFO'}] ${data.message}`);
   });

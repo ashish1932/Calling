@@ -16,7 +16,7 @@ import {
   Modal,
   Image
 } from 'react-native';
-import { webrtcService, SERVER_URL } from './src/services/webrtc';
+import { webrtcService, SERVER_URL, setServerUrl } from './src/services/webrtc';
 import * as Notifications from 'expo-notifications';
 
 let cachedInCallManager = null;
@@ -129,6 +129,7 @@ let mobileAuthToken = '';
 export default function App() {
   const [uiState, setUiState] = useState('login'); // login, dashboard, incoming, active
   const [userRole, setUserRole] = useState('patient'); // patient, counselor
+  const [serverUrl, setLocalServerUrl] = useState(SERVER_URL);
   const [patientId, setPatientId] = useState('PT-8885-b20d');
   const [counselorId, setCounselorId] = useState('counsellor_amritsar@cbm.gov.in');
   const [targetPatientId, setTargetPatientId] = useState('PT-8885-b20d');
@@ -690,6 +691,7 @@ export default function App() {
       return;
     }
     
+    setServerUrl(serverUrl);
     setStatusMsg('Authenticating...');
     try {
       const authUrl = userRole === 'patient' ? `${SERVER_URL}/api/auth/patient-login` : `${SERVER_URL}/api/auth/login`;
@@ -976,6 +978,18 @@ export default function App() {
             <Text style={styles.loginTitle}>CounselFlow</Text>
             <Text style={styles.loginSubtitle}>Real-time mental health connection</Text>
 
+            <View style={styles.govBanner}>
+              <Image 
+                source={require('./assets/logo.png')} 
+                style={styles.govImage} 
+              />
+              <View style={styles.govTextContainer}>
+                <Text style={styles.govName}>S. Bhagwant Singh Mann</Text>
+                <Text style={styles.govTitle}>Hon'ble Chief Minister, Punjab</Text>
+                <Text style={styles.govInitiative}>Drug-Free Punjab Initiative</Text>
+              </View>
+            </View>
+
             {/* Role selection tab */}
             <Text style={styles.label}>Log in as:</Text>
             <View style={styles.roleRow}>
@@ -1017,6 +1031,17 @@ export default function App() {
               </>
             )}
 
+            <Text style={styles.label}>Server URL</Text>
+            <TextInput
+              style={styles.input}
+              value={serverUrl}
+              onChangeText={setLocalServerUrl}
+              placeholder="e.g. https://domain.ngrok-free.dev"
+              placeholderTextColor="#64748b"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
             <TouchableOpacity style={styles.btnPrimary} onPress={handleLogin}>
               <Text style={styles.btnText}>Login & Open Dashboard</Text>
             </TouchableOpacity>
@@ -1053,6 +1078,19 @@ export default function App() {
               >
                 <Text style={styles.logoutBtnText}>Logout</Text>
               </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Government Banner */}
+          <View style={styles.dashboardGovBanner}>
+            <Image 
+              source={require('./assets/logo.png')} 
+              style={styles.dashboardGovImage} 
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.dashboardGovText}>S. Bhagwant Singh Mann</Text>
+              <Text style={styles.dashboardGovSubtext}>Hon'ble Chief Minister, Punjab</Text>
+              <Text style={styles.dashboardGovInitiative}>Drug-Free Punjab Initiative</Text>
             </View>
           </View>
 
@@ -2138,5 +2176,78 @@ const styles = StyleSheet.create({
   },
   roleBtnTextActive: {
     color: '#ffffff',
+  },
+  govBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#030712',
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    padding: 12,
+    borderRadius: 14,
+    width: '100%',
+    marginBottom: 20,
+    gap: 12,
+  },
+  govImage: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: '#0d9488',
+  },
+  govTextContainer: {
+    flex: 1,
+  },
+  govName: {
+    color: '#f8fafc',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  govTitle: {
+    color: '#94a3b8',
+    fontSize: 10,
+    marginTop: 1,
+  },
+  govInitiative: {
+    color: '#0d9488',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  dashboardGovBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#1f2937',
+    padding: 14,
+    borderRadius: 20,
+    width: '100%',
+    marginBottom: 20,
+    gap: 14,
+  },
+  dashboardGovImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 1.5,
+    borderColor: '#0d9488',
+  },
+  dashboardGovText: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  dashboardGovSubtext: {
+    color: '#94a3b8',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  dashboardGovInitiative: {
+    color: '#0d9488',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
   }
 });
