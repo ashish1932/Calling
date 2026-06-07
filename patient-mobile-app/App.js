@@ -143,6 +143,7 @@ export default function App() {
   const [showReconnect, setShowReconnect] = useState(false);
   const [patients, setPatients] = useState([]);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
   
   // Interactive feature states
   const [activeModal, setActiveModal] = useState(null); // 'breathing', 'mood', 'chat', 'reminder', null
@@ -209,6 +210,18 @@ export default function App() {
     return false;
   };
 
+  const cleanTranscriptForLanguage = (text, lang) => {
+    if (!text) return '';
+    if (lang === 'hi') {
+      let cleaned = text.replace(/[\u0A00-\u0A7F]/g, '');
+      if (!/[\u0900-\u097F]/.test(cleaned)) {
+        return '';
+      }
+      return cleaned.trim();
+    }
+    return text;
+  };
+
   const logErrorToServer = (context, err) => {
     const msg = err.message || String(err);
     console.warn(`[ASR Error] ${context}:`, msg);
@@ -252,6 +265,7 @@ export default function App() {
               formData.append("file", event.data, "chunk.webm");
               formData.append("model", "whisper-large-v3");
               formData.append("temperature", "0");
+              formData.append("language", selectedLanguage);
               formData.append("prompt", "Telemedicine counseling in Punjab. CRITICAL: Hindi must be Devanagari (e.g., नमस्ते, ठीक, मदद, हैं, है, हूँ). NEVER Romanize Hindi. Punjabi must be Gurmukhi (e.g., ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਠੀਕ, ਮਦਦ). NEVER Romanize Punjabi. English in Latin script. Transcribe exactly as spoken. Do NOT translate.");
 
               const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
@@ -271,7 +285,7 @@ export default function App() {
 
               if (response.ok) {
                 const resData = await response.json();
-                const text = resData.text;
+                const text = cleanTranscriptForLanguage(resData.text, selectedLanguage);
                 if (text && !isHallucination(text)) {
                   const newTranscript = { sender: userRole, text: text.trim() };
                   setTranscripts(prev => [...prev, newTranscript]);
@@ -360,6 +374,7 @@ export default function App() {
               type: 'audio/m4a',
               name: 'chunk.m4a',
             });
+            formData.append('language', selectedLanguage);
             // Note: model, language, temperature, prompt are all set server-side
             // for consistent quality control and anti-hallucination
 
@@ -380,7 +395,7 @@ export default function App() {
 
             if (response.ok) {
               const resData = await response.json();
-              const text = resData.text;
+              const text = cleanTranscriptForLanguage(resData.text, selectedLanguage);
               
               if (webrtcService.socket && webrtcService.socket.connected) {
                 webrtcService.socket.emit('log-message', {
@@ -695,8 +710,9 @@ export default function App() {
     setStatusMsg('Authenticating...');
     try {
       const authUrl = userRole === 'patient' ? `${SERVER_URL}/api/auth/patient-login` : `${SERVER_URL}/api/auth/login`;
+      const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
       const authBody = userRole === 'patient' 
-        ? { patientId: idToConnect } 
+        ? { patientId: idToConnect, preferredLanguage: langMap[selectedLanguage] || 'en-US' } 
         : { username: idToConnect, password: 'CBM@Counsellor24' }; // Fallback password for counsellors
 
       const authRes = await fetch(authUrl, {
@@ -743,7 +759,10 @@ export default function App() {
         // Skip transcripts of our own voice relayed back from the counselor dashboard
         // to avoid duplicate entries (counselor dashboard may also transcribe our stream)
         if (data.sender === userRole) return;
-        setTranscripts(prev => [...prev, data]);
+        const text = cleanTranscriptForLanguage(data.text, selectedLanguage);
+        if (text) {
+          setTranscripts(prev => [...prev, { ...data, text }]);
+        }
       },
       onCallQualityUpdate: (status) => {
         setCallQuality(status);
@@ -1042,6 +1061,27 @@ export default function App() {
               autoCorrect={false}
             />
 
+            {userRole === 'patient' && (
+              <>
+                <Text style={styles.label}>Preferred Language</Text>
+                <View style={styles.langRow}>
+                  {[
+                    { code: 'en', name: 'English' },
+                    { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                    { code: 'hi', name: 'हिन्दी' }
+                  ].map(lang => (
+                    <TouchableOpacity 
+                      key={lang.code} 
+                      onPress={() => setSelectedLanguage(lang.code)}
+                      style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                    >
+                      <Text style={styles.langBtnText}>{lang.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+
             <TouchableOpacity style={styles.btnPrimary} onPress={handleLogin}>
               <Text style={styles.btnText}>Login & Open Dashboard</Text>
             </TouchableOpacity>
@@ -1163,6 +1203,45 @@ export default function App() {
             </>
           ) : (
             <>
+              {/* Preferred Language Selector Card */}
+              <View style={styles.dashboardCard}>
+                <Text style={styles.cardHeader}>Preferred Language</Text>
+                <Text style={[styles.label, { marginBottom: 10 }]}>Change transcription and system language</Text>
+                <View style={styles.langRow}>
+                  {[
+                    { code: 'en', name: 'English' },
+                    { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                    { code: 'hi', name: 'हिन्दी' }
+                  ].map(lang => (
+                    <TouchableOpacity 
+                      key={lang.code} 
+                      onPress={async () => {
+                        setSelectedLanguage(lang.code);
+                        // Also persist to server DB
+                        const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
+                        try {
+                          await fetch(`${SERVER_URL}/api/auth/patient-login`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'X-Requested-With': 'XMLHttpRequest',
+                              'ngrok-skip-browser-warning': '1'
+                            },
+                            body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
+                          });
+                          console.log('[MobileApp] Updated preferred language on dashboard change:', lang.code);
+                        } catch (err) {
+                          console.warn('[MobileApp] Failed to update language on server:', err.message);
+                        }
+                      }}
+                      style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                    >
+                      <Text style={styles.langBtnText}>{lang.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
               {/* Counselor Info Card */}
               <View style={styles.dashboardCard}>
                 <Text style={styles.cardHeader}>Your Assigned Counselor</Text>
@@ -1320,6 +1399,43 @@ export default function App() {
             <TouchableOpacity onPress={handleReconnect} style={styles.reconnectBtn}>
               <Text style={{ color: '#fff', fontWeight: 'bold' }}>⚠️ Signal Lost - Reconnect</Text>
             </TouchableOpacity>
+          )}
+
+          {/* Active Call Language selection bar */}
+          {userRole === 'patient' && (
+            <View style={[styles.langRow, { marginBottom: 15, width: '100%' }]}>
+              {[
+                { code: 'en', name: 'English' },
+                { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                { code: 'hi', name: 'हिन्दी' }
+              ].map(lang => (
+                <TouchableOpacity 
+                  key={lang.code} 
+                  onPress={async () => {
+                    setSelectedLanguage(lang.code);
+                    // Also persist to server DB so counselor gets updated
+                    const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
+                    try {
+                      await fetch(`${SERVER_URL}/api/auth/patient-login`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'X-Requested-With': 'XMLHttpRequest',
+                          'ngrok-skip-browser-warning': '1'
+                            },
+                        body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
+                      });
+                      console.log('[MobileApp] Updated preferred language mid-call:', lang.code);
+                    } catch (err) {
+                      console.warn('[MobileApp] Failed to update language on server:', err.message);
+                    }
+                  }}
+                  style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                >
+                  <Text style={styles.langBtnText}>{lang.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
 
           {/* Live Transcript View */}

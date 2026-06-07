@@ -293,7 +293,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.post('/api/auth/patient-login', async (req, res) => {
-  const { patientId, name } = req.body;
+  const { patientId, name, preferredLanguage } = req.body;
   if (!patientId) {
     return res.status(400).json({ error: 'patientId is required' });
   }
@@ -302,8 +302,16 @@ app.post('/api/auth/patient-login', async (req, res) => {
     const patientObj = await Patient.findOne({ id: patientId });
     if (patientObj) {
       patientName = patientObj.name;
+      if (preferredLanguage) {
+        patientObj.preferredLanguage = preferredLanguage;
+        await patientObj.save();
+      }
     } else {
-      const newPt = new Patient({ id: patientId, name: patientName });
+      const newPt = new Patient({ 
+        id: patientId, 
+        name: patientName, 
+        preferredLanguage: preferredLanguage || 'pa-IN' 
+      });
       await newPt.save();
     }
   } catch (err) {
@@ -751,10 +759,12 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
                   'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
                   'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
                   'CRITICAL RULES:\n' +
-                  '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n' +
+                  (resolvedLanguage === 'hi'
+                    ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only.\n'
+                    : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
                   '2. Remove filler words (like "um", "uh", "like") and stuttered repetitions (e.g., "i i went" -> "i went").\n' +
                   '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
-                  '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ", "ਠੀਕ ਹੈ").\n' +
+                  '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
                   '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
                   'Return ONLY the cleaned transcript, nothing else.'
               },
