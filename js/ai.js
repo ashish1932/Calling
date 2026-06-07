@@ -12,11 +12,15 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
+    const token = window.localStorage.getItem('counseling_logged_in_token');
     const headers = { 
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "ngrok-skip-browser-warning": "1"
     };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
 
     if (provider === 'gemini') {
       return {
@@ -362,10 +366,14 @@ The JSON object must have EXACTLY these fields:
         'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
       formData.append("prompt", domainPrompt);
 
+      const token = window.localStorage.getItem('counseling_logged_in_token');
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
 
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",

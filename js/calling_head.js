@@ -226,7 +226,7 @@ class CallManager {
         return;
       }
       
-      const key = e.key.toLowerCase();
+      const key = (e.key || '').toLowerCase();
       if (e.key === 'Escape') {
         e.preventDefault();
         this.endCall();
