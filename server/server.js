@@ -659,36 +659,48 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     else if (originalName.endsWith('.webm')) mimeType = 'audio/webm';
     else if (originalName.endsWith('.wav')) mimeType = 'audio/wav';
 
-    // ── Step 1: Call Gemini 1.5 Flash multimodal transcription ──
+    // ── Step 1: Call Gemini multimodal transcription with fallback for rate limits (429) ──
     let rawText = '';
-    try {
-      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const requestBody = {
-        contents: [{
-          parts: [
-            {
-              inlineData: {
-                mimeType: mimeType,
-                data: base64Audio
-              }
-            },
-            {
-              text: `Transcribe this audio recording exactly as spoken in its original script and language.
+    const modelsToTry = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-flash-latest',
+      'gemini-2.5-flash-lite',
+      'gemini-3.1-flash-lite'
+    ];
+
+    for (const modelName of modelsToTry) {
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+        const requestBody = {
+          contents: [{
+            parts: [
+              {
+                inlineData: {
+                  mimeType: mimeType,
+                  data: base64Audio
+                }
+              },
+              {
+                text: `Transcribe this audio recording exactly as spoken in its original script and language.
 The speakers freely mix English (Latin script), Hindi (Devanagari script), and Punjabi (Gurmukhi script).
 CRITICAL:
 1. Do NOT translate or summarize. Keep each word in its spoken script.
 2. If the audio is silence, background noise, or unintelligible, output an empty string.
 3. Clean up stutters and filler words.`
-            }
-          ]
-        }]
-      };
+              }
+            ]
+          }]
+        };
 
-      const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 25000 });
-      rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-      console.debug(`[ASR Proxy] Gemini audio transcription result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-    } catch (fullModelErr) {
-      console.warn('[ASR Proxy] Gemini audio transcription failed:', fullModelErr.message);
+        const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 12000 });
+        rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        console.debug(`[ASR Proxy] Gemini audio transcription success with model ${modelName} (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+        break;
+      } catch (fullModelErr) {
+        console.warn(`[ASR Proxy] Gemini audio transcription failed with model ${modelName}:`, fullModelErr.message);
+        // Continue to the next model in the fallback chain
+      }
     }
 
     // ── Server-side hallucination guard ───────────────────────────────────
@@ -737,15 +749,14 @@ CRITICAL:
           'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
           'CRITICAL RULES:\n' +
           (resolvedLanguage === 'hi'
-            ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only.\n'
+            ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only. If there are English words like "upload", write them in Devanagari (e.g. "अपलोड").\n'
             : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
-          '2. Remove filler words (like "um", "uh", "like") and stuttered repetitions (e.g., "i i went" -> "i went").\n' +
+          '2. Remove filler words (like "um", "uh", "like"), stuttered repetitions (e.g., "i i went" -> "i went", "हैलो हैलो" -> "हेलो", "पूछो ना पूछो ना" -> "पूछो ना"), and duplicate/repeated phrases.\n' +
           '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
           '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
           '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
-          'Return ONLY the cleaned transcript, nothing else.';
+          'Ensure the output flows naturally as a single coherent statement without mechanical repetition loops. Return ONLY the cleaned transcript, nothing else.';
 
-        const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
         const correctionBody = {
           contents: [{
             parts: [
@@ -758,13 +769,22 @@ CRITICAL:
           }
         };
 
-        const llmResp = await axios.post(correctionUrl, correctionBody, { timeout: 15000 });
-        const cleaned = llmResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (cleaned) {
-          rawText = cleaned.trim().replace(/^["']|["']$/g, '');
+        for (const modelName of modelsToTry) {
+          try {
+            const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+            const llmResp = await axios.post(correctionUrl, correctionBody, { timeout: 10000 });
+            const cleaned = llmResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (cleaned) {
+              rawText = cleaned.trim().replace(/^["']|["']$/g, '');
+              console.debug(`[ASR Proxy] Gemini post-processing success with model ${modelName}: "${rawText.substring(0, 80)}"`);
+              break;
+            }
+          } catch (llmErr) {
+            console.warn(`[ASR Proxy] Gemini post-processing failed with model ${modelName}:`, llmErr.message);
+          }
         }
-      } catch (llmErr) {
-        console.warn('[ASR Proxy] Gemini post-processing failed, using raw ASR output:', llmErr.message);
+      } catch (err) {
+        console.warn('[ASR Proxy] Gemini post-processing entirely failed:', err.message);
       }
     }
 
