@@ -266,7 +266,7 @@ export default function App() {
               formData.append("model", "whisper-large-v3");
               formData.append("temperature", "0");
               formData.append("language", selectedLanguage);
-              formData.append("prompt", "Telemedicine counseling in Punjab. CRITICAL: Hindi must be Devanagari (e.g., नमस्ते, ठीक, मदद, हैं, है, हूँ). NEVER Romanize Hindi. Punjabi must be Gurmukhi (e.g., ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਠੀਕ, ਮਦਦ). NEVER Romanize Punjabi. English in Latin script. Transcribe exactly as spoken. Do NOT translate.");
+              formData.append("prompt", "नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।");
 
               const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
                 method: "POST",

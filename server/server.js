@@ -631,11 +631,7 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     const originalName = req.file.originalname || 'chunk.m4a';
 
     const domainPrompt =
-      'Official telemedicine counseling recording in Punjab. ' +
-      'CRITICAL: Hindi must be Devanagari (e.g., नमस्ते, ठीक, मदद, हैं, है, हूँ). NEVER Romanize Hindi. ' +
-      'Punjabi must be Gurmukhi (e.g., ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ, ਠੀਕ, ਮਦਦ). NEVER Romanize Punjabi. ' +
-      'English in Latin script. ' +
-      'Please transcribe exactly what is spoken in the original language and script. Do not translate. Do NOT Romanize. Keep stutters if meaningful, otherwise clean up.';
+      'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸो। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
     const promptToUse = req.body.prompt || domainPrompt;
 
     // Resolve language hint: prioritize request body, fallback to patient preferredLanguage in DB
@@ -730,7 +726,11 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       "लेकिन मेरे में क्यों नहीं होना चाहिए",
       "तुक बोले गया तब ना बोल तो रहा है",
       "तो डेस्पोर्ट check करना",
-      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
+      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब",
+      "अंग्रेजी में लैटिन लिपि", "मैं अनुवाद नहीं करूंगा",
+      "मित्रों नमस्ते", "मेरे चैनल पर स्वागत है",
+      "आपको इसकी आवश्यकता क्यों है", "आपको क्या चाहिए",
+      "वह यहाँ आया और अब वह आपके हाथ साफ कर रहा है"
     ];
     
     const isHallucination = 
