@@ -361,7 +361,7 @@ class CallManager {
     const recorder = new MediaRecorder(stream, options);
     recorder.ondataavailable = async (event) => {
       try {
-        if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+        if (event.data.size > 1500 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
           this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
             const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
             if (transcript && this.isActive) {
@@ -377,6 +377,17 @@ class CallManager {
               const HALLUCINATIONS = [
                 "what's going on", "everything is fine", "i'm feeling a bit anxious",
                 "i am feeling very anxious and restless my heart is racing and i am having trouble breathing",
+                "i am feeling very anxious and restless",
+                "i have been experiencing chest pain and shortness of breath for the past few days",
+                "my heart rate is very fast and i am having trouble sleeping",
+                "i am also experiencing palpitations and dizziness",
+                "i am worried that i might be having a heart attack",
+                "i am feeling very scared and anxious",
+                "i am feeling very weak",
+                "doctor",
+                "i am experiencing severe chest pain and difficulty breathing",
+                "i am feeling like i am going to pass out",
+                "i am feeling like i am going to collapse",
                 "i am scared",
                 "i am experiencing chest pain shortness of breath and a feeling of impending doom",
                 "i am feeling like i am going to die",
