@@ -234,7 +234,7 @@ export default function App() {
   };
 
   const startRealLiveTranscription = async () => {
-    stopRealLiveTranscription();
+    await stopRealLiveTranscription();
 
     console.log('[ASR] Starting real live transcription loop...');
     if (webrtcService.socket && webrtcService.socket.connected) {
@@ -432,6 +432,13 @@ export default function App() {
           
           let currentRecording = null;
           try {
+            if (recordingRef.current) {
+              try {
+                await recordingRef.current.stopAndUnloadAsync();
+              } catch (e) {}
+              recordingRef.current = null;
+            }
+
             currentRecording = new Audio.Recording();
             recordingRef.current = currentRecording;
             
@@ -489,7 +496,7 @@ export default function App() {
     }
   };
 
-  const stopRealLiveTranscription = () => {
+  const stopRealLiveTranscription = async () => {
     console.log('[ASR] Stopping real live transcription loop...');
     transcriptionLoopIdRef.current = 0; // invalidate any active loops
     if (Platform.OS === 'web') {
@@ -509,7 +516,7 @@ export default function App() {
         const temp = recordingRef.current;
         recordingRef.current = null;
         try {
-          temp.stopAndUnloadAsync();
+          await temp.stopAndUnloadAsync();
         } catch (e) {}
       }
     }
