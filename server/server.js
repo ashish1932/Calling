@@ -659,47 +659,75 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     else if (originalName.endsWith('.webm')) mimeType = 'audio/webm';
     else if (originalName.endsWith('.wav')) mimeType = 'audio/wav';
 
-    // ── Step 1: Call Gemini multimodal transcription with fallback for rate limits (429) ──
+    // ── Step 1: Call Sarvam AI Speech-to-Text API (with Gemini fallback) ──
     let rawText = '';
-    const modelsToTry = [
-      'gemini-2.5-flash',
-      'gemini-2.0-flash',
-      'gemini-flash-latest',
-      'gemini-2.5-flash-lite',
-      'gemini-3.1-flash-lite'
-    ];
+    let sarvamSuccess = false;
+    try {
+      const sarvamApiKey = 'sk_5ecrzrs1_lPbP9vkwT5k8tQwnJPnDvpiY';
+      const form = new FormData();
+      form.append('file', req.file.buffer, {
+        filename: originalName || 'audio.m4a',
+        contentType: mimeType
+      });
+      form.append('model', 'saaras:v3');
 
-    for (const modelName of modelsToTry) {
-      try {
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-        const requestBody = {
-          contents: [{
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType,
-                  data: base64Audio
-                }
-              },
-              {
-                text: `Transcribe this audio recording exactly as spoken in its original script and language.
+      const sarvamResp = await axios.post('https://api.sarvam.ai/speech-to-text', form, {
+        headers: {
+          'api-subscription-key': sarvamApiKey,
+          ...form.getHeaders()
+        },
+        timeout: 15000
+      });
+
+      rawText = (sarvamResp.data?.transcript || '').trim();
+      console.debug(`[ASR Proxy] Sarvam AI STT success (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+      sarvamSuccess = true;
+    } catch (sarvamErr) {
+      const errorMsg = sarvamErr.response?.data?.message || sarvamErr.response?.data || sarvamErr.message;
+      console.warn('[ASR Proxy] Sarvam AI STT failed, falling back to Gemini ASR. Error:', errorMsg);
+    }
+
+    if (!sarvamSuccess) {
+      // Fallback: Gemini multimodal transcription chain
+      const modelsToTry = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-flash-latest',
+        'gemini-2.5-flash-lite',
+        'gemini-3.1-flash-lite'
+      ];
+
+      for (const modelName of modelsToTry) {
+        try {
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+          const requestBody = {
+            contents: [{
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType,
+                    data: base64Audio
+                  }
+                },
+                {
+                  text: `Transcribe this audio recording exactly as spoken in its original script and language.
 The speakers freely mix English (Latin script), Hindi (Devanagari script), and Punjabi (Gurmukhi script).
 CRITICAL:
 1. Do NOT translate or summarize. Keep each word in its spoken script.
 2. If the audio is silence, background noise, or unintelligible, output an empty string.
 3. Clean up stutters and filler words.`
-              }
-            ]
-          }]
-        };
+                }
+              ]
+            }]
+          };
 
-        const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 12000 });
-        rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-        console.debug(`[ASR Proxy] Gemini audio transcription success with model ${modelName} (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-        break;
-      } catch (fullModelErr) {
-        console.warn(`[ASR Proxy] Gemini audio transcription failed with model ${modelName}:`, fullModelErr.message);
-        // Continue to the next model in the fallback chain
+          const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 12000 });
+          rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+          console.debug(`[ASR Proxy] Gemini fallback audio transcription success with model ${modelName} (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+          break;
+        } catch (fullModelErr) {
+          console.warn(`[ASR Proxy] Gemini fallback audio transcription failed with model ${modelName}:`, fullModelErr.message);
+        }
       }
     }
 
