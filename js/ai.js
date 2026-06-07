@@ -350,7 +350,7 @@ The JSON object must have EXACTLY these fields:
       // Only pass a language hint when we're confident of the dominant language.
       // Whisper auto-detect works well for English but benefits from hints
       // for Indic languages. Map BCP-47 codes to ISO-639-1.
-      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': null };
+      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': 'en' };
       const langHint = langMap[languageCode] || null;
       if (langHint) {
         formData.append("language", langHint);
@@ -361,9 +361,12 @@ The JSON object must have EXACTLY these fields:
       const domainPrompt =
         'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
         'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
-        'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
-        'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
-        'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
+        'CRITICAL SCRIPT RULES: Hindi MUST be written in Devanagari script (हिंदी). NEVER output Romanized Hindi (e.g., "namaste", "theek hai", "haan ji", "kya haal") — those are WRONG. ' +
+        'Punjabi MUST be written in Gurmukhi script (ਪੰਜਾਬੀ). NEVER output Romanized Punjabi. ' +
+        'Hindi vocabulary: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक, हैं, है, हूँ, करो, दो, जाओ, आओ. ' +
+        'Punjabi vocabulary: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ, ਨਹੀਂ, ਕਰੋ. ' +
+        'English vocabulary: OOAT clinic, medicine, treatment, doctor, patient, health, recovery, counseling. ' +
+        'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate. Do NOT Romanize.';
       formData.append("prompt", domainPrompt);
 
       const headers = {

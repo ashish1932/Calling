@@ -252,7 +252,7 @@ export default function App() {
               formData.append("file", event.data, "chunk.webm");
               formData.append("model", "whisper-large-v3");
               formData.append("temperature", "0");
-              formData.append("prompt", "This is a telemedicine counseling session for addiction recovery in Punjab. The speakers use a mix of English, Hindi (जैसे नशा, दवाई, इलाज, समस्या, मदद), and Punjabi (ਜਿਵੇਂ ਕਿ ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਠੀਕ). Transcribe the spoken words exactly as they are pronounced in their respective scripts (English in Latin, Hindi in Devanagari, Punjabi in Gurmukhi).");
+              formData.append("prompt", "This is a telemedicine counseling session for addiction recovery in Punjab, India. CRITICAL SCRIPT RULES: Hindi MUST be written in Devanagari script (हिंदी). NEVER output Romanized Hindi (e.g., 'namaste', 'theek hai', 'haan ji', 'kya haal') — those are WRONG. Punjabi MUST be written in Gurmukhi script (ਪੰਜਾਬੀ). NEVER output Romanized Punjabi. Hindi vocabulary: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक, हैं, है, हूँ, करो, दो, जाओ, आओ. Punjabi vocabulary: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ, ਨਹੀਂ, ਕਰੋ. English vocabulary: OOAT clinic, medicine, treatment, doctor, patient, health, recovery, counseling. Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate. Do NOT Romanize.");
 
               const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
                 method: "POST",
