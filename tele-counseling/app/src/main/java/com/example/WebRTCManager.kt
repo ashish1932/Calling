@@ -103,7 +103,9 @@ class WebRTCManager(
                                     listener.onWebRTCLog("LiveKit: Connected to room!")
                                     
                                     // Create and publish local mic track
-                                    localAudioTrack = room?.localParticipant?.createAudioTrack("mic")
+                                    localAudioTrack = room?.localParticipant?.createAudioTrack(
+                                        io.livekit.android.room.track.options.AudioTrackOptions.createAudioTrackOptions("mic")
+                                    )
                                     localAudioTrack?.let {
                                         localAudioTrack?.start()
                                         CoroutineScope(Dispatchers.IO).launch {

@@ -23,7 +23,7 @@ window.CounselFlow.CONFIG = {
   INACTIVITY_LIMIT_MS: 2 * 60 * 60 * 1000, // 2 hours
   ASR_MAX_RETRY_COUNT: 3,
   ASR_RETRY_DELAY_MS: 3000,
-  ENABLE_REAL_CALLS: false, // Set false for simulation/demo mode — no real calls placed
+  ENABLE_REAL_CALLS: true, // Set false for simulation/demo mode — no real calls placed
   STATUSES: {
     ACTIVE: 'Active',
     MONITORED: 'Monitored',

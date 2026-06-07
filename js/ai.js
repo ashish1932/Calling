@@ -338,10 +338,6 @@ The JSON object must have EXACTLY these fields:
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
-      if (window.CounselFlow.CONFIG.GROQ_API_KEY) {
-        headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GROQ_API_KEY}`;
-      }
-
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",
         headers: headers,
