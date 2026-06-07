@@ -15,7 +15,7 @@ const { Server } = require('socket.io');
 require('dotenv').config({ path: path.join(__dirname, '../.env') });
 
 // Validate environment variables on boot
-const REQUIRED_ENV = ['GROQ_API_KEY', 'MONGODB_URI', 'JWT_SECRET'];
+const REQUIRED_ENV = ['GEMINI_API_KEY', 'MONGODB_URI', 'JWT_SECRET'];
 const missingEnv = REQUIRED_ENV.filter(key => {
   const val = process.env[key];
   return !val || val === 'your_groq_api_key_here' || val === 'your_gemini_api_key_here';
@@ -596,12 +596,18 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
   try {
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured on the server" } });
     }
     
-    const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', req.body, {
+    // Map request model to gemini-1.5-flash
+    const body = {
+      ...req.body,
+      model: 'gemini-1.5-flash'
+    };
+
+    const response = await axios.post('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', body, {
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
@@ -617,9 +623,9 @@ app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
 
 app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
-    const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured on the server" } });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(401).json({ error: { message: "GEMINI_API_KEY not configured on the server" } });
     }
     
     if (!req.file) {
@@ -629,10 +635,6 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
     console.debug(`[ASR Proxy] Received chunk: ${req.file.size} bytes, name: ${req.file.originalname}`);
 
     const originalName = req.file.originalname || 'chunk.m4a';
-
-    const domainPrompt =
-      'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸो। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
-    const promptToUse = req.body.prompt || domainPrompt;
 
     // Resolve language hint: prioritize request body, fallback to patient preferredLanguage in DB
     let resolvedLanguage = req.body.language;
@@ -650,59 +652,43 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       }
     }
 
-    // ── Helper: build Whisper form data for a given model ──
-    const buildWhisperForm = (model) => {
-      const form = new FormData();
-      form.append('file', req.file.buffer, originalName);
-      form.append('model', model);
-      if (resolvedLanguage && resolvedLanguage !== 'null') {
-        form.append('language', resolvedLanguage);
-      }
-      form.append('prompt', promptToUse);
-      form.append('temperature', '0');
-      form.append('response_format', 'json');
-      return form;
-    };
+    // Convert audio buffer to base64
+    const base64Audio = req.file.buffer.toString('base64');
+    let mimeType = req.file.mimetype || 'audio/m4a';
+    if (originalName.endsWith('.m4a')) mimeType = 'audio/m4a';
+    else if (originalName.endsWith('.webm')) mimeType = 'audio/webm';
+    else if (originalName.endsWith('.wav')) mimeType = 'audio/wav';
 
-    // ── Step 1: Primary Whisper transcription (High-accuracy full model) ──
+    // ── Step 1: Call Gemini 1.5 Flash multimodal transcription ──
     let rawText = '';
     try {
-      const form1 = buildWhisperForm('whisper-large-v3');
-      const whisperResp = await axios.post(
-        'https://api.groq.com/openai/v1/audio/transcriptions',
-        form1,
-        {
-          headers: { ...form1.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-          timeout: 20000
-        }
-      );
-      rawText = (whisperResp.data?.text || '').trim();
-      console.debug(`[ASR Proxy] Full model result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-    } catch (fullModelErr) {
-      console.warn('[ASR Proxy] Full model failed:', fullModelErr.message);
-    }
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+      const requestBody = {
+        contents: [{
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Audio
+              }
+            },
+            {
+              text: `Transcribe this audio recording exactly as spoken in its original script and language.
+The speakers freely mix English (Latin script), Hindi (Devanagari script), and Punjabi (Gurmukhi script).
+CRITICAL:
+1. Do NOT translate or summarize. Keep each word in its spoken script.
+2. If the audio is silence, background noise, or unintelligible, output an empty string.
+3. Clean up stutters and filler words.`
+            }
+          ]
+        }]
+      };
 
-    // ── Step 1b: Two-pass fallback — retry with turbo if full model failed ──
-    if (!rawText || rawText.length < 5) {
-      try {
-        console.debug('[ASR Proxy] Full model gave empty/short result, retrying with whisper-large-v3-turbo...');
-        const form2 = buildWhisperForm('whisper-large-v3-turbo');
-        const fallbackResp = await axios.post(
-          'https://api.groq.com/openai/v1/audio/transcriptions',
-          form2,
-          {
-            headers: { ...form2.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-            timeout: 15000
-          }
-        );
-        const fallbackText = (fallbackResp.data?.text || '').trim();
-        console.debug(`[ASR Proxy] Turbo model result (${fallbackText.length} chars): "${fallbackText.substring(0, 80)}"`);
-        if (fallbackText.length > rawText.length) {
-          rawText = fallbackText;
-        }
-      } catch (fallbackErr) {
-        console.warn('[ASR Proxy] Turbo fallback also failed:', fallbackErr.message);
-      }
+      const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 25000 });
+      rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+      console.debug(`[ASR Proxy] Gemini audio transcription result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+    } catch (fullModelErr) {
+      console.warn('[ASR Proxy] Gemini audio transcription failed:', fullModelErr.message);
     }
 
     // ── Server-side hallucination guard ───────────────────────────────────
@@ -742,54 +728,43 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       rawText = '';
     }
 
-    // ── Step 2: LLM post-processing — clean up glitches and filter hallucinations ──
+    // ── Step 2: Gemini post-processing — clean up glitches and filter hallucinations ──
     if (rawText.length > 2) {
       try {
-        const llmResp = await axios.post(
-          'https://api.groq.com/openai/v1/chat/completions',
-          {
-            model: 'llama-3.3-70b-versatile',
-            temperature: 0,
-            max_tokens: 1024,
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'You are a transcript corrector for a telemedicine counseling session in Punjab.\n' +
-                  'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
-                  'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
-                  'CRITICAL RULES:\n' +
-                  (resolvedLanguage === 'hi'
-                    ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only.\n'
-                    : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
-                  '2. Remove filler words (like "um", "uh", "like") and stuttered repetitions (e.g., "i i went" -> "i went").\n' +
-                  '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
-                  '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
-                  '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
-                  'Return ONLY the cleaned transcript, nothing else.'
-              },
-              {
-                role: 'user',
-                content: `Transcript: "${rawText}"`
-              }
-            ]
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 12000
-          }
-        );
+        const systemPrompt =
+          'You are a transcript corrector for a telemedicine counseling session in Punjab.\n' +
+          'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
+          'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
+          'CRITICAL RULES:\n' +
+          (resolvedLanguage === 'hi'
+            ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only.\n'
+            : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
+          '2. Remove filler words (like "um", "uh", "like") and stuttered repetitions (e.g., "i i went" -> "i went").\n' +
+          '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
+          '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
+          '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
+          'Return ONLY the cleaned transcript, nothing else.';
 
-        const cleaned = llmResp.data?.choices?.[0]?.message?.content?.trim();
-        if (cleaned !== undefined) {
-          rawText = cleaned.replace(/^["']|["']$/g, '');
+        const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        const correctionBody = {
+          contents: [{
+            parts: [
+              { text: systemPrompt },
+              { text: `Transcript to clean:\n"${rawText}"` }
+            ]
+          }],
+          generationConfig: {
+            temperature: 0
+          }
+        };
+
+        const llmResp = await axios.post(correctionUrl, correctionBody, { timeout: 15000 });
+        const cleaned = llmResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (cleaned) {
+          rawText = cleaned.trim().replace(/^["']|["']$/g, '');
         }
       } catch (llmErr) {
-        // LLM post-processing is best-effort — fall back to raw Whisper text
-        console.warn('[ASR Proxy] LLM post-processing failed, using raw Whisper output:', llmErr.message);
+        console.warn('[ASR Proxy] Gemini post-processing failed, using raw ASR output:', llmErr.message);
       }
     }
 
