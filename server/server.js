@@ -624,11 +624,12 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
 
     // Rich trilingual domain prompt to guide Whisper vocabulary
     const domainPrompt =
-      'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
-      'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
-      'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
-      'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
-      'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
+      'This is an official audio recording of a counselor talking with a patient about drug addiction recovery and medical treatment in Punjab. ' +
+      'The speakers talk in a mix of Punjabi (Gurmukhi), Hindi (Devanagari), and English. ' +
+      'Common Punjabi words: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਪਰਿਵਾਰ, ਸਿਹਤ, ਠੀਕ, ਓਟ ਕਲੀਨਿਕ, ਓਟ, ਗੋਲੀ, ਮਦਦ, ਹਸਪਤਾਲ, ਡਾਕਟਰ. ' +
+      'Common Hindi words: नशा, दवाई, इलाज, परिवार, सेहत, ठीक, ओट क्लिनिक, गोली, मदद, अस्पताल, डॉक्टर. ' +
+      'Common English words: OOAT clinic, medicine, treatment, doctor, patient, health, recovery, counseling. ' +
+      'Please transcribe exactly what is spoken in the original language and script. Do not translate. Keep stutters if meaningful, otherwise clean up.';
     const promptToUse = req.body.prompt || domainPrompt;
 
     // Resolve language hint: prioritize request body, fallback to patient preferredLanguage in DB
@@ -661,44 +662,44 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       return form;
     };
 
-    // ── Step 1: Primary Whisper transcription (fast turbo model) ──────────
+    // ── Step 1: Primary Whisper transcription (High-accuracy full model) ──
     let rawText = '';
     try {
-      const form1 = buildWhisperForm('whisper-large-v3-turbo');
+      const form1 = buildWhisperForm('whisper-large-v3');
       const whisperResp = await axios.post(
         'https://api.groq.com/openai/v1/audio/transcriptions',
         form1,
         {
           headers: { ...form1.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-          timeout: 15000
+          timeout: 20000
         }
       );
       rawText = (whisperResp.data?.text || '').trim();
-      console.debug(`[ASR Proxy] Turbo result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-    } catch (turboErr) {
-      console.warn('[ASR Proxy] Turbo model failed:', turboErr.message);
+      console.debug(`[ASR Proxy] Full model result (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+    } catch (fullModelErr) {
+      console.warn('[ASR Proxy] Full model failed:', fullModelErr.message);
     }
 
-    // ── Step 1b: Two-pass fallback — retry with full model if turbo gave empty/short ──
+    // ── Step 1b: Two-pass fallback — retry with turbo if full model failed ──
     if (!rawText || rawText.length < 5) {
       try {
-        console.debug('[ASR Proxy] Turbo result too short, retrying with whisper-large-v3...');
-        const form2 = buildWhisperForm('whisper-large-v3');
+        console.debug('[ASR Proxy] Full model gave empty/short result, retrying with whisper-large-v3-turbo...');
+        const form2 = buildWhisperForm('whisper-large-v3-turbo');
         const fallbackResp = await axios.post(
           'https://api.groq.com/openai/v1/audio/transcriptions',
           form2,
           {
             headers: { ...form2.getHeaders(), 'Authorization': `Bearer ${apiKey}` },
-            timeout: 20000
+            timeout: 15000
           }
         );
         const fallbackText = (fallbackResp.data?.text || '').trim();
-        console.debug(`[ASR Proxy] Full model result (${fallbackText.length} chars): "${fallbackText.substring(0, 80)}"`);
+        console.debug(`[ASR Proxy] Turbo model result (${fallbackText.length} chars): "${fallbackText.substring(0, 80)}"`);
         if (fallbackText.length > rawText.length) {
           rawText = fallbackText;
         }
       } catch (fallbackErr) {
-        console.warn('[ASR Proxy] Full model fallback also failed:', fallbackErr.message);
+        console.warn('[ASR Proxy] Turbo fallback also failed:', fallbackErr.message);
       }
     }
 
@@ -722,7 +723,7 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       "see you in the next video", "see you next time",
       "लेकिन मेरे में क्यों नहीं होना चाहिए",
       "तुक बोले गया तब ना बोल तो रहा है",
-      "तो डेस्पोर्ट चेक करना",
+      "तो डेस्पोर्ट check करना",
       "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब"
     ];
     
@@ -735,32 +736,29 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       rawText = '';
     }
 
-    // ── Step 2: LLM post-processing — fix script errors & hallucinations ──────
-    // Only run if there's actual content to clean
+    // ── Step 2: LLM post-processing — clean up glitches and filter hallucinations ──
     if (rawText.length > 2) {
       try {
         const llmResp = await axios.post(
           'https://api.groq.com/openai/v1/chat/completions',
           {
-            model: 'llama-3.1-8b-instant',
+            model: 'llama-3.3-70b-versatile',
             temperature: 0,
             max_tokens: 1024,
             messages: [
               {
                 role: 'system',
                 content:
-                  'You are a transcript corrector for a Punjab telemedicine counseling session.\n' +
-                  'The speech is a natural mix of English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
-                  'CRITICAL RULES for trilingual correction:\n' +
-                  '1. Punjabi words MUST use Gurmukhi script (ਆਖਰੀ, ਪਰਿਵਾਰ, ਨਸ਼ਾ) — NEVER Devanagari for Punjabi words.\n' +
-                  '2. Hindi words MUST use Devanagari script (आख़री, परिवार, नशा) — NEVER Gurmukhi for Hindi words.\n' +
-                  '3. English words stay in English — DO NOT translate or transliterate.\n' +
-                  '4. If a word mixes scripts incorrectly (e.g., half Gurmukhi half Devanagari), fix to the correct script.\n' +
-                  '5. Remove ONLY: "um", "uh", repeated words, YouTube phrases ("subscribe", "thank you for watching"), silence artifacts.\n' +
-                  '6. If unclear or the entire input is noise/hallucination, return EMPTY STRING "" — DO NOT guess.\n' +
-                  '7. Do NOT translate. Do NOT add words. Do NOT summarise.\n' +
-                  '8. Do NOT discard short, normal conversational responses like "yes", "no", "okay", "hello", "ji", "haan", "ठीक है", "नहीं", "ਪਤਾ ਨਹੀਂ", "ਠੀਕ ਹੈ ਜੀ", "ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ", or similar replies. Only return empty string if the input is a known Whisper hallucination (like "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe") or completely unintelligible noise.\n' +
-                  'Return ONLY the corrected transcript, nothing else.'
+                  'You are a transcript corrector for a telemedicine counseling session in Punjab.\n' +
+                  'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
+                  'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
+                  'CRITICAL RULES:\n' +
+                  '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n' +
+                  '2. Remove filler words (like "um", "uh", "like") and stuttered repetitions (e.g., "i i went" -> "i went").\n' +
+                  '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
+                  '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ", "ਠੀਕ ਹੈ").\n' +
+                  '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
+                  'Return ONLY the cleaned transcript, nothing else.'
               },
               {
                 role: 'user',
@@ -779,7 +777,6 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
 
         const cleaned = llmResp.data?.choices?.[0]?.message?.content?.trim();
         if (cleaned !== undefined) {
-          // Strip any wrapping quotes the LLM might have added
           rawText = cleaned.replace(/^["']|["']$/g, '');
         }
       } catch (llmErr) {
