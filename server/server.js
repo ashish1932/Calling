@@ -621,6 +621,174 @@ app.post('/api/ai/chat/completions', authenticateJWT, async (req, res) => {
   }
 });
 
+async function transcribeAudioBuffer(buffer, originalName, mimeType, resolvedLanguage, apiKey) {
+  // ── Step 1: Call Sarvam AI Speech-to-Text API (with Gemini fallback) ──
+  let rawText = '';
+  let sarvamSuccess = false;
+  try {
+    const sarvamApiKey = 'sk_5ecrzrs1_lPbP9vkwT5k8tQwnJPnDvpiY';
+    const form = new FormData();
+    form.append('file', buffer, {
+      filename: originalName || 'audio.m4a',
+      contentType: mimeType
+    });
+    form.append('model', 'saaras:v3');
+
+    const sarvamResp = await axios.post('https://api.sarvam.ai/speech-to-text', form, {
+      headers: {
+        'api-subscription-key': sarvamApiKey,
+        ...form.getHeaders()
+      },
+      timeout: 15000
+    });
+
+    rawText = (sarvamResp.data?.transcript || '').trim();
+    console.debug(`[ASR Proxy] Sarvam AI STT success (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+    sarvamSuccess = true;
+  } catch (sarvamErr) {
+    const errorMsg = sarvamErr.response?.data?.message || sarvamErr.response?.data || sarvamErr.message;
+    console.warn('[ASR Proxy] Sarvam AI STT failed, falling back to Gemini ASR. Error:', errorMsg);
+  }
+
+  if (!sarvamSuccess) {
+    // Fallback: Gemini multimodal transcription chain
+    const modelsToTry = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-flash-latest',
+      'gemini-2.5-flash-lite',
+      'gemini-3.1-flash-lite'
+    ];
+
+    const base64Audio = buffer.toString('base64');
+    for (const modelName of modelsToTry) {
+      try {
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+        const requestBody = {
+          contents: [{
+            parts: [
+              {
+                inlineData: {
+                  mimeType: mimeType,
+                  data: base64Audio
+                }
+              },
+              {
+                text: `Transcribe this audio recording exactly as spoken in its original script and language.
+The speakers freely mix English (Latin script), Hindi (Devanagari script), and Punjabi (Gurmukhi script).
+CRITICAL:
+1. Do NOT translate or summarize. Keep each word in its spoken script.
+2. If the audio is silence, background noise, or unintelligible, output an empty string.
+3. Clean up stutters and filler words.`
+              }
+            ]
+          }]
+        };
+
+        const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 12000 });
+        rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        console.debug(`[ASR Proxy] Gemini fallback audio transcription success with model ${modelName} (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
+        break;
+      } catch (fullModelErr) {
+        console.warn(`[ASR Proxy] Gemini fallback audio transcription failed with model ${modelName}:`, fullModelErr.message);
+      }
+    }
+  }
+
+  // ── Server-side hallucination guard ───────────────────────────────────
+  const cleanRawLower = rawText.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
+  
+  const EXACT_HALLUCINATIONS = [
+    'do not', "don't", 'do not track', 'pata', 'pata ne',
+    'thank you', 'bye bye', 'goodbye', 'see you',
+    'you', 'so', 'the', 'and', 'is', 'it',
+    '...', '. . .', '.   .', 'okay okay okay'
+  ];
+  
+  const SUBSTRING_HALLUCINATIONS = [
+    "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
+    "hello i'm a 12 year old", "i'm a 12 year old",
+    "thank you for watching", "thanks for watching", "please subscribe",
+    "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
+    "see you in the next video", "see you next time",
+    "लेकिन मेरे में क्यों नहीं होना चाहिए",
+    "तुक बोले गया तब ना बोल तो रहा है",
+    "तो डेस्पोर्ट check करना",
+    "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब",
+    "अंग्रेजी में लैटिन लिपि", "मैं अनुवाद नहीं करूंगा",
+    "मित्रों नमस्ते", "मेरे चैनल पर स्वागत है",
+    "आपको इसकी आवश्यकता क्यों है", "आपको क्या चाहिए",
+    "वह यहाँ आया और अब वह आपके हाथ साफ कर रहा है"
+  ];
+  
+  const isHallucination = 
+    EXACT_HALLUCINATIONS.includes(cleanRawLower) || 
+    SUBSTRING_HALLUCINATIONS.some(h => cleanRawLower.includes(h.toLowerCase()));
+
+  if (isHallucination) {
+    console.debug('[ASR Proxy] Server-side hallucination filtered:', rawText);
+    rawText = '';
+  }
+
+  // ── Step 2: Gemini post-processing — clean up glitches and filter hallucinations ──
+  if (rawText.length > 2) {
+    try {
+      const systemPrompt =
+        'You are a transcript corrector for a telemedicine counseling session in Punjab.\n' +
+        'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
+        'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
+        'CRITICAL RULES:\n' +
+        (resolvedLanguage === 'hi'
+          ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only. If there are English words like "upload", write them in Devanagari (e.g. "अपलोड").\n'
+          : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
+        '2. Remove filler words (like "um", "uh", "like"), stuttered repetitions (e.g., "i i went" -> "i went", "हैलो हैलो" -> "हेलो", "पूछो ना पूछो ना" -> "पूछो ना"), and duplicate/repeated phrases.\n' +
+        '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
+        '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
+        '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
+        'Ensure the output flows naturally as a single coherent statement without mechanical repetition loops. Return ONLY the cleaned transcript, nothing else.';
+
+      const correctionBody = {
+        contents: [{
+          parts: [
+            { text: systemPrompt },
+            { text: `Transcript to clean:\n"${rawText}"` }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0
+        }
+      };
+
+      const modelsToTry = [
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-flash-latest',
+        'gemini-2.5-flash-lite',
+        'gemini-3.1-flash-lite'
+      ];
+
+      for (const modelName of modelsToTry) {
+        try {
+          const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+          const llmResp = await axios.post(correctionUrl, correctionBody, { timeout: 10000 });
+          const cleaned = llmResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          if (cleaned) {
+            rawText = cleaned.trim().replace(/^["']|["']$/g, '');
+            console.debug(`[ASR Proxy] Gemini post-processing success with model ${modelName}: "${rawText.substring(0, 80)}"`);
+            break;
+          }
+        } catch (llmErr) {
+          console.warn(`[ASR Proxy] Gemini post-processing failed with model ${modelName}:`, llmErr.message);
+        }
+      }
+    } catch (err) {
+      console.warn('[ASR Proxy] Gemini post-processing entirely failed:', err.message);
+    }
+  }
+
+  return rawText;
+}
+
 app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'), async (req, res) => {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -652,177 +820,86 @@ app.post('/api/ai/audio/transcriptions', authenticateJWT, upload.single('file'),
       }
     }
 
-    // Convert audio buffer to base64
-    const base64Audio = req.file.buffer.toString('base64');
     let mimeType = req.file.mimetype || 'audio/x-m4a';
     if (originalName.endsWith('.m4a') || mimeType === 'audio/m4a') mimeType = 'audio/x-m4a';
     else if (originalName.endsWith('.webm')) mimeType = 'audio/webm';
     else if (originalName.endsWith('.wav')) mimeType = 'audio/wav';
 
-    // ── Step 1: Call Sarvam AI Speech-to-Text API (with Gemini fallback) ──
-    let rawText = '';
-    let sarvamSuccess = false;
-    try {
-      const sarvamApiKey = 'sk_5ecrzrs1_lPbP9vkwT5k8tQwnJPnDvpiY';
-      const form = new FormData();
-      form.append('file', req.file.buffer, {
-        filename: originalName || 'audio.m4a',
-        contentType: mimeType
-      });
-      form.append('model', 'saaras:v3');
-
-      const sarvamResp = await axios.post('https://api.sarvam.ai/speech-to-text', form, {
-        headers: {
-          'api-subscription-key': sarvamApiKey,
-          ...form.getHeaders()
-        },
-        timeout: 15000
-      });
-
-      rawText = (sarvamResp.data?.transcript || '').trim();
-      console.debug(`[ASR Proxy] Sarvam AI STT success (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-      sarvamSuccess = true;
-    } catch (sarvamErr) {
-      const errorMsg = sarvamErr.response?.data?.message || sarvamErr.response?.data || sarvamErr.message;
-      console.warn('[ASR Proxy] Sarvam AI STT failed, falling back to Gemini ASR. Error:', errorMsg);
-    }
-
-    if (!sarvamSuccess) {
-      // Fallback: Gemini multimodal transcription chain
-      const modelsToTry = [
-        'gemini-2.5-flash',
-        'gemini-2.0-flash',
-        'gemini-flash-latest',
-        'gemini-2.5-flash-lite',
-        'gemini-3.1-flash-lite'
-      ];
-
-      for (const modelName of modelsToTry) {
-        try {
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-          const requestBody = {
-            contents: [{
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: mimeType,
-                    data: base64Audio
-                  }
-                },
-                {
-                  text: `Transcribe this audio recording exactly as spoken in its original script and language.
-The speakers freely mix English (Latin script), Hindi (Devanagari script), and Punjabi (Gurmukhi script).
-CRITICAL:
-1. Do NOT translate or summarize. Keep each word in its spoken script.
-2. If the audio is silence, background noise, or unintelligible, output an empty string.
-3. Clean up stutters and filler words.`
-                }
-              ]
-            }]
-          };
-
-          const geminiResp = await axios.post(geminiUrl, requestBody, { timeout: 12000 });
-          rawText = (geminiResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-          console.debug(`[ASR Proxy] Gemini fallback audio transcription success with model ${modelName} (${rawText.length} chars): "${rawText.substring(0, 80)}"`);
-          break;
-        } catch (fullModelErr) {
-          console.warn(`[ASR Proxy] Gemini fallback audio transcription failed with model ${modelName}:`, fullModelErr.message);
-        }
-      }
-    }
-
-    // ── Server-side hallucination guard ───────────────────────────────────
-    const cleanRawLower = rawText.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?।\s]+/g, " ").trim();
-    
-    // Short phrases/words that should only be blocked if they are the EXACT transcript
-    const EXACT_HALLUCINATIONS = [
-      'do not', "don't", 'do not track', 'pata', 'pata ne',
-      'thank you', 'bye bye', 'goodbye', 'see you',
-      'you', 'so', 'the', 'and', 'is', 'it',
-      '...', '. . .', '.   .', 'okay okay okay'
-    ];
-    
-    // Long unique phrases that can be blocked if they appear anywhere
-    const SUBSTRING_HALLUCINATIONS = [
-      "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
-      "hello i'm a 12 year old", "i'm a 12 year old",
-      "thank you for watching", "thanks for watching", "please subscribe",
-      "like and subscribe", "subscribe to my channel", "don't forget to subscribe",
-      "see you in the next video", "see you next time",
-      "लेकिन मेरे में क्यों नहीं होना चाहिए",
-      "तुक बोले गया तब ना बोल तो रहा है",
-      "तो डेस्पोर्ट check करना",
-      "सब्सक्राइब करो", "लाइक करो", "चैनल सब्सक्राइब",
-      "अंग्रेजी में लैटिन लिपि", "मैं अनुवाद नहीं करूंगा",
-      "मित्रों नमस्ते", "मेरे चैनल पर स्वागत है",
-      "आपको इसकी आवश्यकता क्यों है", "आपको क्या चाहिए",
-      "वह यहाँ आया और अब वह आपके हाथ साफ कर रहा है"
-    ];
-    
-    const isHallucination = 
-      EXACT_HALLUCINATIONS.includes(cleanRawLower) || 
-      SUBSTRING_HALLUCINATIONS.some(h => cleanRawLower.includes(h.toLowerCase()));
-
-    if (isHallucination) {
-      console.debug('[ASR Proxy] Server-side hallucination filtered:', rawText);
-      rawText = '';
-    }
-
-    // ── Step 2: Gemini post-processing — clean up glitches and filter hallucinations ──
-    if (rawText.length > 2) {
-      try {
-        const systemPrompt =
-          'You are a transcript corrector for a telemedicine counseling session in Punjab.\n' +
-          'The transcript contains speech in English, Hindi (Devanagari), and Punjabi (Gurmukhi).\n' +
-          'Your only task is to clean up transcription glitches, stutters, and silence artifacts while retaining every spoken word.\n' +
-          'CRITICAL RULES:\n' +
-          (resolvedLanguage === 'hi'
-            ? '1. HINDI ONLY: The preferred language is Hindi. You MUST translate or convert all spoken words (English, Punjabi, etc.) into Hindi Devanagari script. Do NOT output any Latin (English) letters or Gurmukhi (Punjabi) script. The entire output must be in Devanagari script (Hindi) only. If there are English words like "upload", write them in Devanagari (e.g. "अपलोड").\n'
-            : '1. DO NOT translate or summarize. Retain all English, Hindi, and Punjabi words exactly in their respective scripts as transcribed.\n') +
-          '2. Remove filler words (like "um", "uh", "like"), stuttered repetitions (e.g., "i i went" -> "i went", "हैलो हैलो" -> "हेलो", "पूछो ना पूछो ना" -> "पूछो ना"), and duplicate/repeated phrases.\n' +
-          '3. Remove obvious Whisper silence hallucinations (e.g. "Hello. I\'m a 12-year-old", "Thank you for watching", "Please subscribe", "like and subscribe").\n' +
-          '4. Do NOT drop short replies or conversational responses (like "ji", "haan", "yes", "okay", "सत श्री अकाल", "ਠੀਕ ਹੈ").\n' +
-          '5. Do NOT guess or add information. If the input is empty or unintelligible noise, return empty string.\n' +
-          'Ensure the output flows naturally as a single coherent statement without mechanical repetition loops. Return ONLY the cleaned transcript, nothing else.';
-
-        const correctionBody = {
-          contents: [{
-            parts: [
-              { text: systemPrompt },
-              { text: `Transcript to clean:\n"${rawText}"` }
-            ]
-          }],
-          generationConfig: {
-            temperature: 0
-          }
-        };
-
-        for (const modelName of modelsToTry) {
-          try {
-            const correctionUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-            const llmResp = await axios.post(correctionUrl, correctionBody, { timeout: 10000 });
-            const cleaned = llmResp.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-            if (cleaned) {
-              rawText = cleaned.trim().replace(/^["']|["']$/g, '');
-              console.debug(`[ASR Proxy] Gemini post-processing success with model ${modelName}: "${rawText.substring(0, 80)}"`);
-              break;
-            }
-          } catch (llmErr) {
-            console.warn(`[ASR Proxy] Gemini post-processing failed with model ${modelName}:`, llmErr.message);
-          }
-        }
-      } catch (err) {
-        console.warn('[ASR Proxy] Gemini post-processing entirely failed:', err.message);
-      }
-    }
-
+    const rawText = await transcribeAudioBuffer(req.file.buffer, originalName, mimeType, resolvedLanguage, apiKey);
     res.json({ text: rawText });
-
   } catch (error) {
     const status = error.response?.status || 500;
     const data = error.response?.data || { error: { message: error.message } };
     console.error(`[ASR Proxy] Error (HTTP ${status}):`, data);
     res.status(status).json(data);
+  }
+});
+
+app.post('/api/recordings/upload', authenticateJWT, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const fs = require('fs');
+    const path = require('path');
+    const dir = path.join(__dirname, '../recordings');
+    if (!fs.existsSync(dir)){
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const filename = `recording-${Date.now()}-${Math.floor(Math.random()*1000)}.webm`;
+    const filePath = path.join(dir, filename);
+    fs.writeFileSync(filePath, req.file.buffer);
+    
+    const recordingUrl = `/recordings/${filename}`;
+    res.json({ success: true, url: recordingUrl });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/recordings/transcribe', authenticateJWT, async (req, res) => {
+  try {
+    const { logId, recordingUrl } = req.body;
+    if (!logId || !recordingUrl) {
+      return res.status(400).json({ error: 'Missing logId or recordingUrl' });
+    }
+    
+    const log = await CallLog.findOne({ logId });
+    if (!log) {
+      return res.status(404).json({ error: 'Call log not found' });
+    }
+    
+    if (log.summary && log.summary.transcript) {
+      return res.json({ success: true, text: log.summary.transcript });
+    }
+    
+    const fs = require('fs');
+    const path = require('path');
+    const filename = path.basename(recordingUrl);
+    const filePath = path.join(__dirname, '../recordings', filename);
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Recording file not found on server' });
+    }
+    
+    const fileBuffer = fs.readFileSync(filePath);
+    
+    let mimeType = 'audio/webm';
+    if (filename.endsWith('.m4a')) mimeType = 'audio/x-m4a';
+    else if (filename.endsWith('.wav')) mimeType = 'audio/wav';
+    
+    const apiKey = process.env.GEMINI_API_KEY;
+    const rawText = await transcribeAudioBuffer(fileBuffer, filename, mimeType, 'pa-IN', apiKey);
+    
+    if (!log.summary) log.summary = {};
+    log.summary.transcript = rawText;
+    log.markModified('summary');
+    await log.save();
+    
+    res.json({ success: true, text: rawText });
+  } catch (error) {
+    console.error('[Transcribe Recording Error]:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

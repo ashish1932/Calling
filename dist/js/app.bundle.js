@@ -2,30 +2,6 @@
 /* --- BUNDLED FROM: js/data.js --- */
 // Mock Patient and Session Data with relative dates and schema versioning
 window.CounselFlow = window.CounselFlow || {};
-// Global secure fetch wrapper to inject JWT, CSRF (X-Requested-With), and Ngrok headers automatically
-(() => {
-  const originalFetch = window.fetch;
-  window.fetch = async function (url, options = {}) {
-    options.headers = options.headers || {};
-    // Add CSRF validation header for state-changing methods
-    const method = (options.method || 'GET').toUpperCase();
-    if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
-      if (!options.headers['X-Requested-With'] && !options.headers['x-requested-with']) {
-        options.headers['X-Requested-With'] = 'XMLHttpRequest';
-      }
-    }
-    // Add Ngrok bypass header
-    if (!options.headers['ngrok-skip-browser-warning']) {
-      options.headers['ngrok-skip-browser-warning'] = '1';
-    }
-    // Add JWT authorization header
-    const token = window.localStorage.getItem('counseling_logged_in_token');
-    if (token && !options.headers['Authorization'] && !options.headers['authorization']) {
-      options.headers['Authorization'] = `Bearer ${token}`;
-    }
-    return originalFetch(url, options);
-  };
-})();
 // Centralized Configuration and Environment variables (Architecture #44, Code Quality #7)
 window.CounselFlow.CONFIG = {
   SCHEMA_VERSION: 14,
@@ -68,9 +44,9 @@ window.CounselFlow.CONFIG = {
   GEMINI_API_KEY: "",
   AI_PROVIDER: (() => {
     try {
-      return window.localStorage.getItem("counseling_ai_provider") || "groq";
+      return window.localStorage.getItem("counseling_ai_provider") || "gemini";
     } catch (e) {
-      return "groq";
+      return "gemini";
     }
   })(),
   DEFAULT_SETTINGS: {
@@ -921,7 +897,7 @@ window.CounselFlow.API_BASE = (() => {
   return `${origin}/api`;
 })();
 const API_BASE = window.CounselFlow.API_BASE;
-// Inject ngrok bypass header into all fetch requests targeting our API
+// Inject headers into all fetch requests targeting our API
 const originalFetch = window.fetch;
 window.fetch = async function(resource, config) {
   if (typeof resource === 'string' && resource.includes(API_BASE)) {
@@ -933,6 +909,10 @@ window.fetch = async function(resource, config) {
     } else {
       config.headers['ngrok-skip-browser-warning'] = '1';
       config.headers['X-Requested-With'] = 'XMLHttpRequest';
+    }
+    const token = window.localStorage.getItem('counseling_logged_in_token');
+    if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
+      config.headers['Authorization'] = `Bearer ${token}`;
     }
   }
   return originalFetch(resource, config);
@@ -1303,12 +1283,16 @@ async function generateEventHash(eventObj) {
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
     } catch (e) {
-      console.warn("crypto.subtle failed, falling back to XXTEA hash", e);
+      console.warn("crypto.subtle failed, falling back to simple hash", e);
     }
   }
-  // Fallback for non-HTTPS origins where crypto.subtle is undefined
-  const signed = xxtea_encrypt(payload, window.CounselFlow.CONFIG.ENCRYPTION_KEY);
-  return btoa(unescape(encodeURIComponent(signed))).slice(0, 32);
+  const hash = 0;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16).padStart(2, '0').repeat(16).slice(0, 32);
 }
 async function getAuditTrail() {
   if (!navigator.onLine) {
@@ -1448,11 +1432,15 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
+    const token = window.localStorage.getItem('counseling_logged_in_token');
     const headers = { 
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "ngrok-skip-browser-warning": "1"
     };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
     if (provider === 'gemini') {
       return {
         endpoint: `${window.CounselFlow.API_BASE}/ai/gemini/chat`,
@@ -1743,7 +1731,7 @@ The JSON object must have EXACTLY these fields:
       // Only pass a language hint when we're confident of the dominant language.
       // Whisper auto-detect works well for English but benefits from hints
       // for Indic languages. Map BCP-47 codes to ISO-639-1.
-      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': null };
+      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': 'en' };
       const langHint = langMap[languageCode] || null;
       if (langHint) {
         formData.append("language", langHint);
@@ -1751,16 +1739,16 @@ The JSON object must have EXACTLY these fields:
       // Rich trilingual domain prompt — gives Whisper vocabulary hints for
       // medical/counseling terminology in English, Hindi, and Punjabi
       const domainPrompt =
-        'This is a telemedicine counseling session for addiction recovery in Punjab, India. ' +
-        'The speakers freely mix English, Hindi and Punjabi (Gurmukhi script). ' +
-        'Hindi: नशा, दवाई, इलाज, समस्या, मदद, परिवार, स्वास्थ्य, उपचार, नशामुक्ति, ठीक. ' +
-        'Punjabi: ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਪਰਿਵਾਰ, ਠੀਕ, ਹਾਂ, ਜੀ. ' +
-        'Transcribe each word in its ORIGINAL spoken language and script. Do NOT translate.';
+        'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
       formData.append("prompt", domainPrompt);
+      const token = window.localStorage.getItem('counseling_logged_in_token');
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",
         headers: headers,
@@ -2524,7 +2512,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (!data.id) {
-       data.id = data.staffId || generateId('C');
+       data.id = data.staffId || ('C-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
     }
     saveLocalCounselor(data);
     window.CounselFlow.writeAuditEvent('COUNSELOR_PROFILE_UPDATED', data.id, 'N/A', getActiveRole(), 'Updated counselor profile via Profiles Management');
@@ -2555,6 +2543,9 @@ class CallManager {
     this.patientIsTranscribing = false;
     this.activePatient = null;
     this.activeLanguage = 'pa-IN';
+    this.fullCallRecorder = null;
+    this.callChunks = [];
+    this.lastSavedLogId = null;
     this.lastSessionTranscript = []; // Cache for post-call summaries (Bug #2)
     this.asrSupportWarned = false; // ASR browser support warning flag (Error Handling #4)
     this.asrRetryCount = 0; // ASR network retry attempt counter (Error Handling #4)
@@ -2641,7 +2632,7 @@ class CallManager {
           await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
           window.CounselFlow.writeAuditEvent(
             'ICE_CANDIDATE_RECEIVED',
-            this.currentPatientId,
+            this.activePatient ? this.activePatient.id : (this.patientSocketId || 'unknown'),
             null,
             window.CounselFlow.getActiveRole(),
             `Received ICE candidate from ${data.source || 'patient'}`
@@ -2872,7 +2863,7 @@ class CallManager {
       if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
         return;
       }
-      const key = e.key.toLowerCase();
+      const key = (e.key || '').toLowerCase();
       if (e.key === 'Escape') {
         e.preventDefault();
         this.endCall();
@@ -2925,7 +2916,7 @@ class CallManager {
                     "thank you", "bye bye", "goodbye", "see you", "okay okay okay",
                     "you", "so", "the", "and", "is", "it",
                     "ਹਾ", "ਜੀਹ", "ਓਹ", "ਅਰੇ", "ਸੁਣੋ", // meaningless fillers
-                    "हूँ", "हैं", "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"
+                    "अरे", "ओह", "झाल", "अलवूँ", "जरूर जो"  // removed "हूँ" and "हैं" — they are real Hindi words
                   ];
                   // Long unique phrases that can be blocked if they appear anywhere
                   const SUBSTRING_HALLUCINATIONS = [
@@ -3199,10 +3190,10 @@ class CallManager {
   // Draw WebRTC audio waveforms with FPS capping and visibility checks (Performance #67, UX #46, UX #47)
   drawWaveform(timestamp) {
     if (!this.isActive) {
-      if (this.animationFrame) {
-        cancelAnimationFrame(this.animationFrame);
-        this.animationFrame = null;
-      }
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
+      this.animationFrame = null;
+    }
       return;
     }
     if (document.hidden) {
@@ -3373,12 +3364,15 @@ class CallManager {
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
       );
     } else if (this.localStream) {
-      this.initLiveTranscription();
+      console.log('[ASR] Live transcription is disabled. Audio will be transcribed after the call ends.');
     } else {
       this.addWarningToTranscriptLog(
         "Microphone Error",
         "Could not access microphone stream. Transcription cannot start."
       );
+    }
+    if (this.isRecording) {
+      setTimeout(() => this.startCallRecorder(), 1500);
     }
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
   }
@@ -3417,6 +3411,9 @@ class CallManager {
      if (this.patientRecorder && this.patientRecorder.state !== "inactive") {
        try { this.patientRecorder.stop(); } catch(e){}
      }
+     if (this.fullCallRecorder && this.fullCallRecorder.state !== "inactive") {
+       try { this.fullCallRecorder.stop(); } catch(e){}
+     }
      // Remove audio unlock handlers
      if (this.audioUnlockHandler) {
        document.removeEventListener('click', this.audioUnlockHandler);
@@ -3454,6 +3451,7 @@ class CallManager {
     const secs = (durationSec % 60).toString().padStart(2, '0');
     const formattedDuration = `${hrs}:${mins}:${secs}`;
     const logId = `LOG-${Math.floor(10000 + Math.random() * 90000)}`;
+    this.lastSavedLogId = logId;
     const newLog = {
       logId: logId,
       patientId: patient.id,
@@ -3741,6 +3739,145 @@ class CallManager {
       this.timerInterval = null;
     }
     this.clearCanvas();
+  }
+  startCallRecorder() {
+    console.log('[Recorder] Initializing call recording...');
+    this.callChunks = [];
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const dest = audioCtx.createMediaStreamDestination();
+      let hasTracks = false;
+      if (this.localStream && this.localStream.getAudioTracks().length > 0) {
+        try {
+          const source1 = audioCtx.createMediaStreamSource(this.localStream);
+          source1.connect(dest);
+          hasTracks = true;
+        } catch (e) {
+          console.warn('[Recorder] Could not connect localStream source:', e);
+        }
+      }
+      let remoteStream = null;
+      if (this.peerConnection) {
+        const receivers = this.peerConnection.getReceivers();
+        const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
+        if (audioReceiver && audioReceiver.track.readyState === 'live') {
+          remoteStream = new MediaStream([audioReceiver.track]);
+        }
+      }
+      if (!remoteStream && this.remoteAudio && this.remoteAudio.srcObject) {
+        remoteStream = this.remoteAudio.srcObject;
+      }
+      if (remoteStream && remoteStream.getAudioTracks().length > 0) {
+        try {
+          const source2 = audioCtx.createMediaStreamSource(remoteStream);
+          source2.connect(dest);
+          hasTracks = true;
+        } catch (e) {
+          console.warn('[Recorder] Could not connect remoteStream source:', e);
+        }
+      }
+      const recordStream = hasTracks ? dest.stream : (this.localStream || remoteStream);
+      if (!recordStream) {
+        console.warn('[Recorder] No audio tracks to record.');
+        return;
+      }
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      this.fullCallRecorder = new MediaRecorder(recordStream, mimeType ? { mimeType } : {});
+      this.fullCallRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          this.callChunks.push(e.data);
+        }
+      };
+      this.fullCallRecorder.onstop = async () => {
+        console.log('[Recorder] Call recorder stopped. Preparing upload...');
+        if (this.callChunks.length === 0) {
+          console.warn('[Recorder] No audio data recorded.');
+          return;
+        }
+        const blob = new Blob(this.callChunks, { type: this.fullCallRecorder.mimeType || 'audio/webm' });
+        await this.uploadCallRecording(blob);
+      };
+      this.fullCallRecorder.start();
+      console.log('[Recorder] Full call recording started.');
+    } catch (err) {
+      console.error('[Recorder] Failed to start call recording:', err);
+    }
+  }
+  async uploadCallRecording(blob) {
+    if (!this.lastSavedLogId) {
+      console.warn('[Recorder] No active call log ID to associate recording with.');
+      return;
+    }
+    const logId = this.lastSavedLogId;
+    console.log(`[Recorder] Uploading recording for log ID ${logId}...`);
+    try {
+      const formData = new FormData();
+      formData.append('file', blob, `call-${logId}.webm`);
+      const token = localStorage.getItem('counseling_token') || '';
+      const resp = await fetch('/api/recordings/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: formData
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        console.log('[Recorder] Upload successful, url:', data.url);
+        // Update local and server call logs
+        const logs = await window.CounselFlow.getCallLogs();
+        const log = logs.find(l => l.logId === logId);
+        if (log) {
+          log.recordingUrl = data.url;
+          await window.CounselFlow.saveCallLogs(logs);
+          console.log('[Recorder] Updated call log recordingUrl locally and synced.');
+          // Refresh the supervisor tables
+          if (window.CounselFlow.app && typeof window.CounselFlow.app.renderSessionHistoryLogs === 'function') {
+            window.CounselFlow.app.renderSessionHistoryLogs();
+          }
+        }
+        // Post-call transcription
+        try {
+          if (window.CounselFlow.app) {
+            window.CounselFlow.app.showToast("Transcribing", "Generating transcript from recording...", "info");
+          }
+          const transcribeResp = await fetch('/api/recordings/transcribe', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': token ? `Bearer ${token}` : ''
+            },
+            body: JSON.stringify({ logId, recordingUrl: data.url })
+          });
+          if (transcribeResp.ok) {
+            const transData = await transcribeResp.json();
+            // Store the full transcript in the cache so AI Summary can read it
+            this.lastSessionTranscript = [{
+              speaker: "System",
+              text: transData.text,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }];
+            this.addTranscriptLine("System", "Transcript ready.", false);
+            // Automatically generate the AI summary
+            if (window.CounselFlow.app && document.getElementById('btn-generate-ai-summary')) {
+              document.getElementById('btn-generate-ai-summary').click();
+            }
+          } else {
+            const err = await transcribeResp.json();
+            if (window.CounselFlow.app) {
+              window.CounselFlow.app.showToast('Transcription Error', err.error || 'Failed to transcribe recording.', 'error');
+            }
+          }
+        } catch (transErr) {
+          console.error("Transcription after call failed", transErr);
+        }
+      } else {
+        const errText = await resp.text();
+        console.error('[Recorder] Upload failed:', errText);
+      }
+    } catch (err) {
+      console.error('[Recorder] Error uploading recording:', err);
+    }
   }
 }
 // Namespace consolidation (Architecture #32)
@@ -6822,6 +6959,32 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     this.showToast("Record Committed", `Session ${newSessionLog.sessionId} saved under ${this.selectedPatient.name}.`, "success");
     this.openPatientDetail(this.selectedPatient);
   }
+  viewTranscriptModal(logId, transcriptText) {
+    const modalDiv = document.createElement('div');
+    modalDiv.className = 'modal-overlay active';
+    modalDiv.id = 'modal-transcript-detail';
+    modalDiv.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:flex; justify-content:center; align-items:center; z-index:9999;';
+    modalDiv.innerHTML = `
+      <div class="modal-content" style="width: 600px; max-width: 95%; background: var(--bg-card, #fff); padding: 24px; border-radius: 16px; border: 1px solid var(--border-light); box-shadow: 0 8px 32px rgba(0,0,0,0.3); display:flex; flex-direction:column; max-height:85%;">
+        <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-light); padding-bottom:12px; margin-bottom:16px;">
+          <h3 style="margin:0; color:var(--text-primary);">Recording Transcript (Log: ${escapeHtml(logId)})</h3>
+          <button class="modal-close" id="btn-close-transcript-modal" style="background:none; border:none; color:var(--text-primary); font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+        <div class="modal-body" style="overflow-y:auto; flex-grow:1; font-size:14px; line-height:1.6; color:var(--text-secondary); max-height:400px; background:var(--bg-input); padding:16px; border-radius:8px; white-space:pre-wrap;">${escapeHtml(transcriptText || 'No transcript generated yet.')}</div>
+        <div class="modal-footer" style="border-top: 1px solid var(--border-light); padding-top:16px; margin-top:16px; display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn-secondary" id="btn-copy-transcript" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Copy Transcript</button>
+          <button class="btn-primary" id="btn-close-transcript-modal-footer" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modalDiv);
+    modalDiv.querySelector('#btn-close-transcript-modal').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-close-transcript-modal-footer').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-copy-transcript').addEventListener('click', () => {
+      navigator.clipboard.writeText(transcriptText);
+      this.showToast('Copied', 'Transcript copied to clipboard.', 'success');
+    });
+  }
   viewSessionDetailModal(patientId, sessionId) {
     const pt = this.patients.find(p => p.id === patientId);
     if (!pt) return;
@@ -7043,6 +7206,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                 <th style="padding:10px 12px; text-align:center;">Duration</th>
                 <th style="padding:10px 12px; text-align:center;">Direction</th>
                 <th style="padding:10px 12px; text-align:center;">Disposition</th>
+                <th style="padding:10px 12px; text-align:center;">Recording / Action</th>
               </tr>
             </thead>
             <tbody>
@@ -7062,6 +7226,14 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                   <td style="padding:10px 12px; text-align:center; font-family:monospace; color:var(--text-primary);">${escapeHtml(log.duration || '—')}</td>
                   <td style="padding:10px 12px; text-align:center;">${directionBadge(log.direction)}</td>
                   <td style="padding:10px 12px; text-align:center;">${dispositionBadge(log.disposition)}</td>
+                  <td style="padding:10px 12px; text-align:center;">
+                    ${log.recordingUrl ? `
+                      <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 160px; margin: 4px 0;">
+                        <audio src="${escapeHtml(log.recordingUrl)}" controls style="height:28px; width:150px; outline:none;"></audio>
+                        <button class="btn-primary transcribe-rec-btn" data-logid="${escapeHtml(log.logId || '')}" data-url="${escapeHtml(log.recordingUrl)}" style="font-size:10px; padding:3px 8px; border-radius:4px; cursor:pointer;">Transcribe Recording</button>
+                      </div>
+                    ` : '<span style="color:var(--text-muted); font-style:italic;">No recording</span>'}
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -7112,6 +7284,39 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
           }
         });
       }
+      document.querySelectorAll('.transcribe-rec-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const logId = btn.getAttribute('data-logid');
+          const recordingUrl = btn.getAttribute('data-url');
+          btn.disabled = true;
+          const originalText = btn.textContent;
+          btn.textContent = 'Transcribing...';
+          try {
+            const token = localStorage.getItem('counseling_token') || '';
+            const resp = await fetch('/api/recordings/transcribe', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': token ? `Bearer ${token}` : ''
+              },
+              body: JSON.stringify({ logId, recordingUrl })
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              this.viewTranscriptModal(logId, data.text);
+            } else {
+              const err = await resp.json();
+              this.showToast('ASR Error', err.error || 'Failed to transcribe call recording.', 'error');
+            }
+          } catch (err) {
+            console.error('Transcription error:', err);
+            this.showToast('Connection Error', 'Failed to communicate with transcription service.', 'error');
+          } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
+        });
+      });
       return;
     }
     let allSessions = [];
@@ -7558,6 +7763,15 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
             <div class="login-title-glow" style="font-size:52px; margin-bottom:8px;"></div>
             <h1 style="font-size:28px; font-weight:800; color:var(--text-primary); margin-bottom:4px; letter-spacing:-0.5px;">CounselFlow</h1>
             <p style="font-size:12px; color:var(--text-secondary); letter-spacing:0.5px;">Tele-Counseling Platform • Community Bridge Model</p>
+          </div>
+          <!-- Government Banner -->
+          <div class="government-banner" style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 12px; margin-bottom: 20px; background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px solid var(--border-light); text-align: center;">
+            <img src="logo.png" alt="S. Bhagwant Singh Mann, Chief Minister of Punjab" style="width: 90px; height: 90px; border-radius: 8px; border: 1.5px solid var(--accent-orange); object-fit: cover; object-position: top; box-shadow: 0 4px 8px rgba(0,0,0,0.15);">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 12px; font-weight: 800; color: var(--text-primary);">S. Bhagwant Singh Mann</span>
+              <span style="font-size: 9.5px; color: var(--accent-orange); font-weight: 600;">Hon'ble Chief Minister, Punjab</span>
+              <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600;">Drug-Free Punjab Campaign</span>
+            </div>
           </div>
           <!-- Login Form Card -->
           <div class="login-card">

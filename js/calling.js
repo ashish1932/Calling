@@ -19,7 +19,9 @@ class CallManager {
     this.patientIsTranscribing = false;
     this.activePatient = null;
     this.activeLanguage = 'pa-IN';
-    
+    this.fullCallRecorder = null;
+    this.callChunks = [];
+    this.lastSavedLogId = null;
     
     this.lastSessionTranscript = []; // Cache for post-call summaries (Bug #2)
     this.asrSupportWarned = false; // ASR browser support warning flag (Error Handling #4)
@@ -965,12 +967,16 @@ class CallManager {
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
       );
     } else if (this.localStream) {
-      this.initLiveTranscription();
+      console.log('[ASR] Live transcription is disabled. Audio will be transcribed after the call ends.');
     } else {
       this.addWarningToTranscriptLog(
         "Microphone Error",
         "Could not access microphone stream. Transcription cannot start."
       );
+    }
+    
+    if (this.isRecording) {
+      setTimeout(() => this.startCallRecorder(), 1500);
     }
 
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
@@ -1015,6 +1021,9 @@ class CallManager {
      }
      if (this.patientRecorder && this.patientRecorder.state !== "inactive") {
        try { this.patientRecorder.stop(); } catch(e){}
+     }
+     if (this.fullCallRecorder && this.fullCallRecorder.state !== "inactive") {
+       try { this.fullCallRecorder.stop(); } catch(e){}
      }
 
      // Remove audio unlock handlers
@@ -1064,6 +1073,7 @@ class CallManager {
     const formattedDuration = `${hrs}:${mins}:${secs}`;
     
     const logId = `LOG-${Math.floor(10000 + Math.random() * 90000)}`;
+    this.lastSavedLogId = logId;
     const newLog = {
       logId: logId,
       patientId: patient.id,
@@ -1400,6 +1410,166 @@ class CallManager {
       this.timerInterval = null;
     }
     this.clearCanvas();
+  }
+
+  startCallRecorder() {
+    console.log('[Recorder] Initializing call recording...');
+    this.callChunks = [];
+    
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const dest = audioCtx.createMediaStreamDestination();
+      let hasTracks = false;
+
+      if (this.localStream && this.localStream.getAudioTracks().length > 0) {
+        try {
+          const source1 = audioCtx.createMediaStreamSource(this.localStream);
+          source1.connect(dest);
+          hasTracks = true;
+        } catch (e) {
+          console.warn('[Recorder] Could not connect localStream source:', e);
+        }
+      }
+      
+      let remoteStream = null;
+      if (this.peerConnection) {
+        const receivers = this.peerConnection.getReceivers();
+        const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
+        if (audioReceiver && audioReceiver.track.readyState === 'live') {
+          remoteStream = new MediaStream([audioReceiver.track]);
+        }
+      }
+      if (!remoteStream && this.remoteAudio && this.remoteAudio.srcObject) {
+        remoteStream = this.remoteAudio.srcObject;
+      }
+
+      if (remoteStream && remoteStream.getAudioTracks().length > 0) {
+        try {
+          const source2 = audioCtx.createMediaStreamSource(remoteStream);
+          source2.connect(dest);
+          hasTracks = true;
+        } catch (e) {
+          console.warn('[Recorder] Could not connect remoteStream source:', e);
+        }
+      }
+
+      const recordStream = hasTracks ? dest.stream : (this.localStream || remoteStream);
+      if (!recordStream) {
+        console.warn('[Recorder] No audio tracks to record.');
+        return;
+      }
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+      this.fullCallRecorder = new MediaRecorder(recordStream, mimeType ? { mimeType } : {});
+      
+      this.fullCallRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) {
+          this.callChunks.push(e.data);
+        }
+      };
+
+      this.fullCallRecorder.onstop = async () => {
+        console.log('[Recorder] Call recorder stopped. Preparing upload...');
+        if (this.callChunks.length === 0) {
+          console.warn('[Recorder] No audio data recorded.');
+          return;
+        }
+        const blob = new Blob(this.callChunks, { type: this.fullCallRecorder.mimeType || 'audio/webm' });
+        await this.uploadCallRecording(blob);
+      };
+
+      this.fullCallRecorder.start();
+      console.log('[Recorder] Full call recording started.');
+    } catch (err) {
+      console.error('[Recorder] Failed to start call recording:', err);
+    }
+  }
+
+  async uploadCallRecording(blob) {
+    if (!this.lastSavedLogId) {
+      console.warn('[Recorder] No active call log ID to associate recording with.');
+      return;
+    }
+    
+    const logId = this.lastSavedLogId;
+    console.log(`[Recorder] Uploading recording for log ID ${logId}...`);
+    
+    try {
+      const formData = new FormData();
+      formData.append('file', blob, `call-${logId}.webm`);
+      
+      const token = localStorage.getItem('counseling_token') || '';
+      const resp = await fetch('/api/recordings/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : ''
+        },
+        body: formData
+      });
+      
+      if (resp.ok) {
+        const data = await resp.json();
+        console.log('[Recorder] Upload successful, url:', data.url);
+        
+        // Update local and server call logs
+        const logs = await window.CounselFlow.getCallLogs();
+        const log = logs.find(l => l.logId === logId);
+        if (log) {
+          log.recordingUrl = data.url;
+          await window.CounselFlow.saveCallLogs(logs);
+          console.log('[Recorder] Updated call log recordingUrl locally and synced.');
+          
+          // Refresh the supervisor tables
+          if (window.CounselFlow.app && typeof window.CounselFlow.app.renderSessionHistoryLogs === 'function') {
+            window.CounselFlow.app.renderSessionHistoryLogs();
+          }
+        }
+        
+        // Post-call transcription
+        try {
+          if (window.CounselFlow.app) {
+            window.CounselFlow.app.showToast("Transcribing", "Generating transcript from recording...", "info");
+          }
+          const transcribeResp = await fetch('/api/recordings/transcribe', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': token ? `Bearer ${token}` : ''
+            },
+            body: JSON.stringify({ logId, recordingUrl: data.url })
+          });
+          
+          if (transcribeResp.ok) {
+            const transData = await transcribeResp.json();
+            // Store the full transcript in the cache so AI Summary can read it
+            this.lastSessionTranscript = [{
+              speaker: "System",
+              text: transData.text,
+              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }];
+            this.addTranscriptLine("System", "Transcript ready.", false);
+            
+            // Automatically generate the AI summary
+            if (window.CounselFlow.app && document.getElementById('btn-generate-ai-summary')) {
+              document.getElementById('btn-generate-ai-summary').click();
+            }
+          } else {
+            const err = await transcribeResp.json();
+            if (window.CounselFlow.app) {
+              window.CounselFlow.app.showToast('Transcription Error', err.error || 'Failed to transcribe recording.', 'error');
+            }
+          }
+        } catch (transErr) {
+          console.error("Transcription after call failed", transErr);
+        }
+
+      } else {
+        const errText = await resp.text();
+        console.error('[Recorder] Upload failed:', errText);
+      }
+    } catch (err) {
+      console.error('[Recorder] Error uploading recording:', err);
+    }
   }
 }
 

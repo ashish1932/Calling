@@ -2802,6 +2802,34 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     this.showToast("Record Committed", `Session ${newSessionLog.sessionId} saved under ${this.selectedPatient.name}.`, "success");
     this.openPatientDetail(this.selectedPatient);
   }
+  viewTranscriptModal(logId, transcriptText) {
+    const modalDiv = document.createElement('div');
+    modalDiv.className = 'modal-overlay active';
+    modalDiv.id = 'modal-transcript-detail';
+    modalDiv.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:flex; justify-content:center; align-items:center; z-index:9999;';
+    
+    modalDiv.innerHTML = `
+      <div class="modal-content" style="width: 600px; max-width: 95%; background: var(--bg-card, #fff); padding: 24px; border-radius: 16px; border: 1px solid var(--border-light); box-shadow: 0 8px 32px rgba(0,0,0,0.3); display:flex; flex-direction:column; max-height:85%;">
+        <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-light); padding-bottom:12px; margin-bottom:16px;">
+          <h3 style="margin:0; color:var(--text-primary);">Recording Transcript (Log: ${escapeHtml(logId)})</h3>
+          <button class="modal-close" id="btn-close-transcript-modal" style="background:none; border:none; color:var(--text-primary); font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+        <div class="modal-body" style="overflow-y:auto; flex-grow:1; font-size:14px; line-height:1.6; color:var(--text-secondary); max-height:400px; background:var(--bg-input); padding:16px; border-radius:8px; white-space:pre-wrap;">${escapeHtml(transcriptText || 'No transcript generated yet.')}</div>
+        <div class="modal-footer" style="border-top: 1px solid var(--border-light); padding-top:16px; margin-top:16px; display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn-secondary" id="btn-copy-transcript" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Copy Transcript</button>
+          <button class="btn-primary" id="btn-close-transcript-modal-footer" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modalDiv);
+    
+    modalDiv.querySelector('#btn-close-transcript-modal').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-close-transcript-modal-footer').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-copy-transcript').addEventListener('click', () => {
+      navigator.clipboard.writeText(transcriptText);
+      this.showToast('Copied', 'Transcript copied to clipboard.', 'success');
+    });
+  }
   viewSessionDetailModal(patientId, sessionId) {
     const pt = this.patients.find(p => p.id === patientId);
     if (!pt) return;
@@ -3023,6 +3051,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                 <th style="padding:10px 12px; text-align:center;">Duration</th>
                 <th style="padding:10px 12px; text-align:center;">Direction</th>
                 <th style="padding:10px 12px; text-align:center;">Disposition</th>
+                <th style="padding:10px 12px; text-align:center;">Recording / Action</th>
               </tr>
             </thead>
             <tbody>
@@ -3042,6 +3071,14 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                   <td style="padding:10px 12px; text-align:center; font-family:monospace; color:var(--text-primary);">${escapeHtml(log.duration || '—')}</td>
                   <td style="padding:10px 12px; text-align:center;">${directionBadge(log.direction)}</td>
                   <td style="padding:10px 12px; text-align:center;">${dispositionBadge(log.disposition)}</td>
+                  <td style="padding:10px 12px; text-align:center;">
+                    ${log.recordingUrl ? `
+                      <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 160px; margin: 4px 0;">
+                        <audio src="${escapeHtml(log.recordingUrl)}" controls style="height:28px; width:150px; outline:none;"></audio>
+                        <button class="btn-primary transcribe-rec-btn" data-logid="${escapeHtml(log.logId || '')}" data-url="${escapeHtml(log.recordingUrl)}" style="font-size:10px; padding:3px 8px; border-radius:4px; cursor:pointer;">Transcribe Recording</button>
+                      </div>
+                    ` : '<span style="color:var(--text-muted); font-style:italic;">No recording</span>'}
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -3092,6 +3129,44 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
           }
         });
       }
+
+      document.querySelectorAll('.transcribe-rec-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const logId = btn.getAttribute('data-logid');
+          const recordingUrl = btn.getAttribute('data-url');
+          
+          btn.disabled = true;
+          const originalText = btn.textContent;
+          btn.textContent = 'Transcribing...';
+          
+          try {
+            const token = localStorage.getItem('counseling_token') || '';
+            const resp = await fetch('/api/recordings/transcribe', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': token ? `Bearer ${token}` : ''
+              },
+              body: JSON.stringify({ logId, recordingUrl })
+            });
+            
+            if (resp.ok) {
+              const data = await resp.json();
+              this.viewTranscriptModal(logId, data.text);
+            } else {
+              const err = await resp.json();
+              this.showToast('ASR Error', err.error || 'Failed to transcribe call recording.', 'error');
+            }
+          } catch (err) {
+            console.error('Transcription error:', err);
+            this.showToast('Connection Error', 'Failed to communicate with transcription service.', 'error');
+          } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
+        });
+      });
+
       return;
     }
     let allSessions = [];
