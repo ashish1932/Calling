@@ -9,9 +9,9 @@ const crypto = require('crypto');
 const multer = require('multer');
 const FormData = require('form-data');
 const { Server } = require('socket.io');
-require('dotenv').config({ path: path.join(__dirname, '../.env') });
+require('dotenv').config({ path: path.join(__dirname, '.env'), override: true });
 
-const { Patient, CallLog, AuditTrail, Counselor, MedicationLog } = require('./models');
+const { Patient, CallLog, AuditTrail, Counselor, MedicationLog, Medicine, OpdVisit } = require('./models');
 const { AccessToken } = require('livekit-server-sdk');
 const admin = require('firebase-admin');
 const fs = require('fs');
@@ -242,6 +242,32 @@ app.post('/api/patients', authenticateJWT, async (req, res) => {
       await Patient.bulkWrite(operations);
     }
     res.json({ success: true, message: 'Patients saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/patients/:id/records/:type', authenticateJWT, async (req, res) => {
+  try {
+    const { id, type } = req.params;
+    const data = req.body;
+    
+    const validTypes = ['vitals', 'medicalHistory', 'familyHistory', 'cowsAssessment'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({ error: 'Invalid record type' });
+    }
+    
+    const updateObj = {};
+    updateObj[type] = data;
+    
+    const patient = await Patient.findOneAndUpdate(
+      { id },
+      { $push: updateObj },
+      { new: true }
+    );
+    
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+    res.json({ success: true, patient });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -500,6 +526,239 @@ app.get('/api/opd/defaulters', authenticateJWT, async (req, res) => {
   }
 });
 
+// GET today's scheduled visits and walk-ins
+app.get('/api/opd/patients/today', authenticateJWT, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    
+    // 1. Get explicitly scheduled visits in OpdVisit
+    const queue = await OpdVisit.find({ date: today });
+    
+    // 2. Also find patients scheduled for nextOpdVisitDate today who aren't in queue yet
+    const scheduledPatients = await Patient.find({ nextOpdVisitDate: today });
+    
+    const existingPatientIds = new Set(queue.map(v => v.patientId));
+    
+    for (const p of scheduledPatients) {
+      if (!existingPatientIds.has(p.id)) {
+        // Create an implicit visit for the queue
+        const newVisit = await OpdVisit.create({
+          visitId: `V-${Date.now()}-${p.id}`,
+          patientId: p.id,
+          date: today,
+          status: 'Waiting',
+          priority: 'Normal',
+          isWalkIn: false
+        });
+        queue.push(newVisit);
+        existingPatientIds.add(p.id);
+      }
+    }
+    
+    // Attach patient details to queue
+    const enrichedQueue = [];
+    for (const visit of queue) {
+      const patient = await Patient.findOne({ id: visit.patientId });
+      enrichedQueue.push({
+        ...visit.toObject(),
+        patientName: patient ? patient.name : 'Unknown',
+        patientPhone: patient ? patient.phone : ''
+      });
+    }
+    
+    res.json(enrichedQueue);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET specific patient details for OPD
+app.get('/api/opd/patients/:query', authenticateJWT, async (req, res) => {
+  try {
+    const { query } = req.params;
+    const regex = new RegExp(query, 'i');
+    const patients = await Patient.find({
+      $or: [
+        { id: regex },
+        { name: regex },
+        { phone: regex }
+      ]
+    }).limit(10);
+    if (!patients || patients.length === 0) return res.status(404).json({ error: 'Patient not found' });
+    res.json(patients);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET today's statistics
+app.get('/api/opd/stats/today', authenticateJWT, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    
+    const totalVisits = await OpdVisit.countDocuments({ date: today });
+    const dispensed = await MedicationLog.countDocuments({ date: today, status: 'dispensed' });
+    const pending = await OpdVisit.countDocuments({ date: today, status: { $in: ['Waiting', 'In Progress'] } });
+    
+    const defaulters = await Patient.countDocuments({ 
+      nextOpdVisitDate: { $lt: today, $ne: null }
+    });
+    
+    res.json({
+      totalVisits,
+      dispensed,
+      pending,
+      defaulters
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST verify patient identity
+app.post('/api/opd/verify', authenticateJWT, async (req, res) => {
+  try {
+    const { patientId } = req.body;
+    const patient = await Patient.findOne({ id: patientId });
+    if (!patient) return res.status(404).json({ error: 'Patient not found' });
+    
+    // In a real scenario, this might verify biometrics or face scan.
+    // For now, we just return the patient as verified.
+    res.json({ verified: true, patient });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET medicine master list
+app.get('/api/opd/medicines', authenticateJWT, async (req, res) => {
+  try {
+    const medicines = await Medicine.find({});
+    res.json(medicines);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST new medicine
+app.post('/api/opd/medicines', authenticateJWT, async (req, res) => {
+  try {
+    const { id, name, stock, unit, expiryDate, lowStockThreshold } = req.body;
+    const med = await Medicine.findOneAndUpdate(
+      { id: id || `MED-${Date.now()}` },
+      { name, stock, unit, expiryDate, lowStockThreshold },
+      { upsert: true, new: true }
+    );
+    res.json(med);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST dispense medicine
+app.post('/api/opd/dispense', authenticateJWT, async (req, res) => {
+  try {
+    const { patientId, medicineId, quantity, nextVisitDate, notes } = req.body;
+    
+    const medicine = await Medicine.findOne({ id: medicineId });
+    if (!medicine) return res.status(404).json({ error: 'Medicine not found' });
+    
+    if (medicine.stock < quantity) {
+      return res.status(400).json({ error: 'Insufficient stock' });
+    }
+    
+    // Deduct stock
+    medicine.stock -= quantity;
+    await medicine.save();
+    
+    const date = new Date().toISOString().split('T')[0];
+    const logId = `OPD-${Date.now()}-${Math.floor(Math.random()*10000)}`;
+    
+    const medLog = await MedicationLog.create({
+      logId,
+      patientId,
+      date,
+      medicineName: medicine.name,
+      quantity,
+      nextVisitDate,
+      notes,
+      uploadedBy: req.user?.id || 'OPD_STAFF'
+    });
+    
+    // Update patient next visit
+    if (nextVisitDate) {
+      await Patient.updateOne(
+        { id: patientId },
+        { $set: { nextOpdVisitDate: nextVisitDate } }
+      );
+    }
+    
+    // Mark today's visit as completed if exists
+    await OpdVisit.updateMany(
+      { patientId, date, status: { $in: ['Waiting', 'In Progress'] } },
+      { $set: { status: 'Completed' } }
+    );
+    
+    res.json({ success: true, log: medLog });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT update visit status
+app.put('/api/opd/visit/:visitId/status', authenticateJWT, async (req, res) => {
+  try {
+    const { visitId } = req.params;
+    const { status } = req.body;
+    
+    const visit = await OpdVisit.findOneAndUpdate(
+      { visitId },
+      { status },
+      { new: true }
+    );
+    
+    if (!visit) return res.status(404).json({ error: 'Visit not found' });
+    res.json(visit);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST register walk-in
+app.post('/api/opd/walkin', authenticateJWT, async (req, res) => {
+  try {
+    const { patientId, name, phone } = req.body;
+    
+    // Find or create patient
+    let patient = await Patient.findOne({ id: patientId });
+    if (!patient) {
+      patient = await Patient.create({
+        id: patientId || `PAT-${Date.now()}`,
+        name: name || 'Walk-in Patient',
+        phone,
+        status: 'Active'
+      });
+    }
+    
+    const today = new Date().toISOString().split('T')[0];
+    const time = new Date().toLocaleTimeString();
+    
+    const newVisit = await OpdVisit.create({
+      visitId: `V-${Date.now()}-${patient.id}`,
+      patientId: patient.id,
+      date: today,
+      time,
+      status: 'Waiting',
+      priority: 'Normal',
+      isWalkIn: true
+    });
+    
+    res.json({ visit: newVisit, patient });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ==========================================
 // AI PROXY ENDPOINTS (GROQ)
 // ==========================================
@@ -713,20 +972,56 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 2b. Web Dashboard initiates handoff to Counselor Mobile App
-  socket.on('handoff-call', (data) => {
-    const targetSocket = counselorSockets[data.to];
-    if (targetSocket) {
-      console.log(`📱 Web Dashboard handing off call to Counselor Mobile ${data.to}`);
-      io.to(targetSocket).emit('handoff-call', {
-        socket: socket.id,
-        roomName: data.roomName,
-        patientName: data.patientName
-      });
-    } else {
-      console.log(`⚠️ Counselor Mobile ${data.to} is not online for handoff.`);
-    }
-  });
+// 2b. Web Dashboard initiates handoff to Counselor Mobile App
+   socket.on('handoff-call', (data) => {
+     const targetSocket = counselorSockets[data.to];
+     if (targetSocket) {
+       console.log(`📱 Web Dashboard handing off call to Counselor Mobile ${data.to}`);
+       io.to(targetSocket).emit('handoff-call', {
+         socket: socket.id,
+         roomName: data.roomName,
+         patientName: data.patientName
+       });
+     } else {
+       console.log(`⚠️ Counselor Mobile ${data.to} is not online for handoff.`);
+     }
+   });
+
+   // 2c. Patient initiates inbound call to counselor (emergency call-back)
+   socket.on('incoming-call', (data) => {
+     const targetSocket = counselorSockets[data.to] || counselorSockets['counselor'];
+     if (targetSocket) {
+       console.log(`📲 Patient ${data.from} calling counselor ${data.to || 'default'}`);
+       io.to(targetSocket).emit('incoming-call', {
+         socket: socket.id,
+         patientId: data.from,
+         roomName: data.roomName,
+         patientName: data.patientName
+       });
+       // Also notify web dashboard counselors
+       socket.broadcast.emit('incoming-call', {
+         socket: socket.id,
+         patientId: data.from,
+         roomName: data.roomName,
+         patientName: data.patientName
+       });
+     } else {
+       console.log(`⚠️ Counselor ${data.to} is not online.`);
+     }
+   });
+
+   // 2d. Broadcast transcription from mobile to web dashboard
+   socket.on('transcription', (data) => {
+     if (data.roomName && data.text) {
+       // Broadcast to all dashboard observers in the room
+       socket.broadcast.emit('transcription', {
+         roomName: data.roomName,
+         text: data.text,
+         speaker: data.speaker,
+         timestamp: data.timestamp || new Date().toISOString()
+       });
+     }
+   });
 
   // 3. Patient answers the call (sends WebRTC Answer)
   socket.on('make-answer', (data) => {

@@ -16,6 +16,7 @@ class AppController {
     this.selectedPatients = new Set();
     this.ddrcQueueSort = 'oldest'; 
     this.currentPatientFilter = { query: '', severity: 'all', status: 'all', minAge: '', maxAge: '', startDate: '', endDate: '' };
+    this.currentWorkflowFilter = { query: '', sort: 'newest' };
     this.notifications = [];
     this.inactivityTimeout = null;
     this.inactivityLimit = window.CounselFlow.CONFIG.INACTIVITY_LIMIT_MS; 
@@ -41,6 +42,7 @@ class AppController {
     });
     this.bindNavigation();
     this.bindSearchAndFilters();
+    this.bindWorkflowSearchAndSort();
     
     const btnExpAnalytics = document.getElementById('btn-export-analytics');
     if (btnExpAnalytics) {
@@ -547,9 +549,21 @@ class AppController {
         this.dom.patientsDetailContainer.style.display = 'none';
       }
     }
+    if (screenId === 'opd') {
+      const activeOpdTab = document.querySelector('.nav-item-opd.active');
+      if (!activeOpdTab) {
+        const firstOpdTab = document.querySelector('.nav-item-opd');
+        if (firstOpdTab) {
+          // Defer click slightly to let switchScreen finish
+          setTimeout(() => firstOpdTab.click(), 0);
+        }
+      }
+    }
     document.querySelectorAll('.nav-item').forEach(el => {
       if (el.getAttribute('data-screen') === screenId) {
-        el.classList.add('active');
+        if (!el.classList.contains('nav-item-opd')) {
+          el.classList.add('active');
+        }
       } else {
         el.classList.remove('active');
       }
@@ -616,6 +630,15 @@ class AppController {
         break;
     }
   }
+
+  renderProfilesList() {
+    if (window.CounselFlow && typeof window.CounselFlow.renderProfilesList === 'function') {
+      window.CounselFlow.renderProfilesList();
+    } else {
+      console.error("renderProfilesList is not defined in window.CounselFlow. Make sure profiles.js is loaded.");
+    }
+  }
+
   bindThemeToggle() {
     const toggleBtn = document.getElementById('btn-theme-toggle');
     if (!toggleBtn) return;
@@ -1069,18 +1092,81 @@ class AppController {
   }
   renderClinicalWorkflow() {
     const board = document.getElementById('clinical-workflow-board');
+    const statsHeatmap = document.getElementById('workflow-stats-heatmap');
     if (!board) return;
     const activeRole = this.activeRole || window.CounselFlow.getActiveRole() || 'counsellor';
-    const filteredPatients = this.getSecurityScopedPatients();
+    const query = (this.currentWorkflowFilter?.query || '').toLowerCase().trim();
+    const sortMode = this.currentWorkflowFilter?.sort || 'newest';
+    let filteredPatients = this.getSecurityScopedPatients();
+    if (query) {
+      filteredPatients = filteredPatients.filter(p =>
+        (p.name || '').toLowerCase().includes(query) ||
+        (p.id || '').toLowerCase().includes(query)
+      );
+    }
     const detoxPatients = filteredPatients.filter(p => (p.clinicalStage === 1 || p.clinicalStage === 2) && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage3Patients = filteredPatients.filter(p => p.clinicalStage === 3 && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage4Patients = filteredPatients.filter(p => p.clinicalStage === 4 && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage5Patients = filteredPatients.filter(p => p.clinicalStage === 5 && p.status !== 'Completed' && p.status !== 'LAMA');
     const lamaPatients = filteredPatients.filter(p => p.status === 'LAMA' || p.clinicalStage === 0);
+    const sortFn = (a, b) => {
+      const dayA = window.CounselFlow.calculateTreatmentDay(a.admissionDate);
+      const dayB = window.CounselFlow.calculateTreatmentDay(b.admissionDate);
+      if (sortMode === 'newest') return dayA - dayB;
+      if (sortMode === 'overdue') return dayB - dayA;
+      if (sortMode === 'severity') {
+        const sevOrder = { 'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3 };
+        return (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9);
+      }
+      return 0;
+    };
+    detoxPatients.sort(sortFn);
+    stage3Patients.sort(sortFn);
+    stage4Patients.sort(sortFn);
+    stage5Patients.sort(sortFn);
+    lamaPatients.sort((a, b) => window.CounselFlow.calculateTreatmentDay(a.admissionDate) - window.CounselFlow.calculateTreatmentDay(b.admissionDate));
+    if (statsHeatmap) {
+      const colDefs = [
+        { id: 'detox', label: 'Detox & Clearance', patients: detoxPatients, thresholds: [14, 10, 5] },
+        { id: 'family', label: 'Family Activation', patients: stage3Patients, thresholds: [14, 10, 5] },
+        { id: 'bridge', label: '30-Day Bridge', patients: stage4Patients, thresholds: [45, 30] },
+        { id: 'maintenance', label: '90-Day Maintenance', patients: stage5Patients, thresholds: [90] },
+        { id: 'lama', label: 'LAMA Cases', patients: lamaPatients, thresholds: [] },
+      ];
+      statsHeatmap.innerHTML = colDefs.map(col => {
+        if (!col.patients.length) return `<span style="color:var(--text-muted);">${col.label}: 0</span>`;
+        const overdue = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge') return day > 45;
+          if (col.id === 'maintenance') return day >= 90;
+          return day > (col.thresholds[0] || 999);
+        }).length;
+        const dueSoon = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge') return day >= 30 && day <= 45;
+          if (col.id === 'maintenance') return false;
+          const t = col.thresholds;
+          return day >= (t[1] || 0) && day <= (t[0] || 999);
+        }).length;
+        const approaching = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge' || col.id === 'maintenance') return 0;
+          return day >= (col.thresholds[2] || 0) && day < (col.thresholds[1] || 999);
+        }).length;
+        const onTrack = col.patients.length - overdue - dueSoon - approaching;
+        return `<span style="display:flex; gap:6px; align-items:center;">
+          <strong style="color:var(--text-primary);">${col.label}:</strong>
+          <span style="color:var(--accent-green);">${onTrack}</span>
+          ${approaching ? `<span style="color:#facc15;">${approaching}</span>` : ''}
+          ${dueSoon ? `<span style="color:var(--accent-orange);">${dueSoon}</span>` : ''}
+          ${overdue ? `<span style="color:var(--accent-red); font-weight:700;">${overdue} overdue</span>` : ''}
+        </span>`;
+      }).join('');
+    }
     const columns = [
       {
         id: 'detox',
-        title: ' Detox & Clearance',
+        title: 'Detox & Clearance',
         subtitle: 'Stage 1 & 2',
         count: detoxPatients.length,
         patients: detoxPatients,
@@ -1091,24 +1177,24 @@ class AppController {
           const disabledAttr = canEdit ? '' : 'disabled';
           return `
             <div class="workflow-check-list">
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="withdrawalStabilised" ${wChecked} ${disabledAttr}>
                 Withdrawal Stabilised
               </label>
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="layer1And2Ready" ${lChecked} ${disabledAttr}>
                 Layer 1+2 Ready
               </label>
             </div>
             ${(canEdit && pt.checkpoints?.withdrawalStabilised && pt.checkpoints?.layer1And2Ready) ? `
-              <button class="workflow-action-btn primary btn-workflow-promote" data-id="${pt.id}" data-target-stage="3" style="margin-top:8px;">Request MO Clearance</button>
+              <button class="workflow-action-btn primary btn-workflow-promote" data-id="${pt.id}" data-target-stage="3">Request MO Clearance</button>
             ` : ''}
           `;
         }
       },
       {
         id: 'family',
-        title: '‍‍‍ Family Activation',
+        title: 'Family Activation',
         subtitle: 'Stage 3',
         count: stage3Patients.length,
         patients: stage3Patients,
@@ -1116,17 +1202,16 @@ class AppController {
           const fChecked = pt.checkpoints?.familyPsychoedAttended ? 'checked' : '';
           const canEdit = ['spo', 'supervisor', 'ddrc'].includes(activeRole);
           const disabledAttr = canEdit ? '' : 'disabled';
-          // Gap 5: Family Anchor Unavailable logic
           const anchorStatus = pt.familyAnchorStatus || 'pending';
           let anchorHtml = '';
           if (anchorStatus === 'unavailable') {
-             anchorHtml = `<div style="font-size:10px; color:var(--accent-orange); margin-top:4px; font-weight:bold;">⚠️ No Family Anchor. Reference card issued.</div>`;
+             anchorHtml = `<div class="workflow-no-family-warning">No Family Anchor. Reference card issued.</div>`;
           } else if (canEdit && !pt.checkpoints?.familyPsychoedAttended) {
              anchorHtml = `<button class="workflow-action-btn secondary btn-workflow-no-family" data-id="${pt.id}" style="margin-top:4px; font-size:10px; border-color:var(--accent-orange); color:var(--accent-orange);">Mark No Family Anchor</button>`;
           }
           return `
             <div class="workflow-check-list">
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="familyPsychoedAttended" ${fChecked} ${disabledAttr}>
                 Family Psychoed Attended
               </label>
@@ -1140,7 +1225,7 @@ class AppController {
       },
       {
         id: 'bridge',
-        title: ' 30-Day Bridge',
+        title: '30-Day Bridge',
         subtitle: 'Stage 4',
         count: stage4Patients.length,
         patients: stage4Patients,
@@ -1149,19 +1234,14 @@ class AppController {
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
           const canFail = ['spo', 'supervisor', 'ddrc'].includes(activeRole);
           const disabledAttr = canEdit ? '' : 'disabled';
-          
-          // Gap 1: Stage 4 Contact Frequency Tracker
           const contactsThisWeek = window.CounselFlow.getStage4ContactsThisWeek ? window.CounselFlow.getStage4ContactsThisWeek(pt) : 0;
-          const contactAlert = contactsThisWeek < 3 ? `<div style="font-size:10px; color:var(--accent-red); margin-top:4px; font-weight:bold;">⚠️ Contacts this week: ${contactsThisWeek}/3 (L1 Alert)</div>` : `<div style="font-size:10px; color:var(--accent-teal); margin-top:4px;">Contacts this week: ${contactsThisWeek}/3</div>`;
-          
-          // Gap 6: NGO Partner Field
-          const ngoHtml = pt.ngoPartner ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">NGO: ${escapeHtml(pt.ngoPartner)}</div>` : `<div style="font-size:10px; color:var(--accent-orange); margin-top:2px;">⚠️ No NGO Partner Assigned</div>`;
-          
+          const contactAlert = contactsThisWeek < 3 ? `<div style="font-size:10px; color:var(--accent-red); margin-top:4px; font-weight:bold;">Contacts this week: ${contactsThisWeek}/3 (L1 Alert)</div>` : `<div style="font-size:10px; color:var(--accent-teal); margin-top:4px;">Contacts this week: ${contactsThisWeek}/3</div>`;
+          const ngoHtml = pt.ngoPartner ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">NGO: ${escapeHtml(pt.ngoPartner)}</div>` : `<div style="font-size:10px; color:var(--accent-orange); margin-top:2px;">No NGO Partner Assigned</div>`;
           return `
             <div class="workflow-check-list">
               ${contactAlert}
               ${ngoHtml}
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'}; margin-top:8px;">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}" style="margin-top:8px;">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="day30ReviewPassed" ${bChecked} ${disabledAttr}>
                 30-Day Review Passed
               </label>
@@ -1177,29 +1257,25 @@ class AppController {
       },
       {
         id: 'maintenance',
-        title: ' 90-Day Maintenance',
+        title: '90-Day Maintenance',
         subtitle: 'Stage 5',
         count: stage5Patients.length,
         patients: stage5Patients,
         renderChecklist: (pt) => {
           const day = window.CounselFlow.calculateTreatmentDay(pt.admissionDate);
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
-          
-          // Gap 10: Step-down cadence indicator
-          // Gap 3: Dual sign-off buttons
           const counselorSigned = pt.stage6SignoffCounsellor ? '✅' : '❌';
           const supervisorSigned = pt.stage6SignoffSupervisor ? '✅' : '❌';
-          
           return `
-            <div style="font-size:11px; color:var(--text-muted); background:var(--bg-card); padding:8px; border-radius:8px; border:1px solid var(--border-light); margin-bottom:8px;">
+            <div class="workflow-maintenance-status">
               Day ${day} on maintenance. Ready for closeout at Day 90.
               <div style="margin-top:4px; font-weight:bold; color:var(--accent-blue);">📉 Reduced Cadence: Weekly Calls</div>
             </div>
             ${(canEdit && day >= 90) ? `
               <div style="font-size:10px; margin-bottom:4px; color:var(--text-secondary);">Final Review Sign-offs:</div>
-              <div style="display:flex; gap:4px; margin-bottom:8px;">
-                <button class="workflow-action-btn secondary btn-workflow-signoff-counsellor" data-id="${pt.id}" style="font-size:9px; padding:4px;" ${pt.stage6SignoffCounsellor ? 'disabled' : ''}>Counsellor ${counselorSigned}</button>
-                <button class="workflow-action-btn secondary btn-workflow-signoff-supervisor" data-id="${pt.id}" style="font-size:9px; padding:4px;" ${pt.stage6SignoffSupervisor ? 'disabled' : ''}>Supervisor ${supervisorSigned}</button>
+              <div class="workflow-signoff-buttons">
+                <button class="workflow-action-btn secondary btn-workflow-signoff-counsellor workflow-signoff-btn" data-id="${pt.id}" ${pt.stage6SignoffCounsellor ? 'disabled' : ''}>Counsellor ${counselorSigned}</button>
+                <button class="workflow-action-btn secondary btn-workflow-signoff-supervisor workflow-signoff-btn" data-id="${pt.id}" ${pt.stage6SignoffSupervisor ? 'disabled' : ''}>Supervisor ${supervisorSigned}</button>
               </div>
             ` : ''}
           `;
@@ -1207,18 +1283,18 @@ class AppController {
       },
       {
         id: 'lama',
-        title: ' LAMA Cases',
+        title: 'LAMA Cases',
         subtitle: 'Stage 0 Discharge',
         count: lamaPatients.length,
         patients: lamaPatients,
         renderChecklist: (pt) => {
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
           return `
-            <div style="font-size:11px; color:var(--accent-red); background:rgba(220,38,38,0.05); padding:8px; border-radius:8px; border:1px solid rgba(220,38,38,0.2); margin-bottom:8px;">
+            <div class="workflow-maintenance-status" style="color:var(--accent-red); background:rgba(220,38,38,0.05); border-color:rgba(220,38,38,0.2);">
               Left Against Medical Advice. Monitor safety-net protocols.
             </div>
             ${canEdit ? `
-            <button class="workflow-action-btn secondary btn-workflow-re-enroll" data-id="${pt.id}" style="border-color:var(--accent-blue); color:var(--accent-blue); background:rgba(0,242,254,0.05);">Re-Enroll Patient</button>
+            <button class="workflow-action-btn secondary btn-workflow-re-enroll workflow-re-enroll-btn" data-id="${pt.id}">Re-Enroll Patient</button>
             ` : ''}
           `;
         }
@@ -1231,8 +1307,8 @@ class AppController {
             <div class="workflow-column-title">${col.title}</div>
             <div class="workflow-column-count">${col.count}</div>
           </div>
-          <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.02em;">${col.subtitle}</div>
-          <div class="workflow-cards-container" style="display:flex; flex-direction:column; gap:12px;">
+          <div class="workflow-column-subtitle">${col.subtitle}</div>
+          <div class="workflow-cards-container">
             ${col.patients.length > 0 ? col.patients.map(pt => {
               const day = window.CounselFlow.calculateTreatmentDay(pt.admissionDate);
               let urgencyColor = 'var(--accent-green)';
@@ -1255,7 +1331,7 @@ class AppController {
                 <div class="workflow-card" data-id="${escapedId}" style="border-left: 3px solid ${urgencyColor};">
                   <div class="workflow-card-header">
                     <div class="workflow-card-info">
-                      <h4 class="workflow-card-nav" style="cursor:pointer; text-decoration:underline;">${escapedName}</h4>
+                       <h4 class="workflow-card-nav">${escapedName}</h4>
                       <span>ID: ${escapedId}</span>
                     </div>
                     <span class="workflow-card-badge" style="background:${urgencyColor}22; color:${urgencyColor};">${urgencyText}</span>
@@ -1417,8 +1493,8 @@ class AppController {
     board.querySelectorAll('.btn-workflow-signoff-counsellor').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const id = e.target.getAttribute('data-id');
-        if (!['counsellor', 'spo', 'supervisor'].includes(activeRole)) {
-          this.showToast('Access Denied', 'Only the Tele-Counsellor can provide counsellor sign-off.', 'error');
+        if (!['counsellor', 'spo', 'supervisor', 'ddrc'].includes(activeRole)) {
+          this.showToast('Access Denied', 'Only the Tele-Counsellor or DDRC Clinical can provide counsellor sign-off.', 'error');
           return;
         }
         const pt = this.patients.find(p => p.id === id);
@@ -1459,9 +1535,10 @@ class AppController {
         }
       });
     });
-    board.querySelectorAll('.workflow-card-nav').forEach(nav => {
+    board.querySelectorAll('.workflow-card').forEach(card => {
+      const nav = card.querySelector('.workflow-card-nav');
+      if (!nav) return;
       nav.addEventListener('click', async (e) => {
-        const card = e.target.closest('.workflow-card');
         const id = card.getAttribute('data-id');
         await this.switchScreen('patients');
         const pt = this.patients.find(p => p.id === id);
@@ -1470,6 +1547,26 @@ class AppController {
         }
       });
     });
+  }
+  bindWorkflowSearchAndSort() {
+    const searchInput = document.getElementById('workflow-search-input');
+    const sortSelect = document.getElementById('workflow-sort-select');
+    if (!searchInput || !sortSelect) return;
+    this.dom.workflowSearchInput = searchInput;
+    this.dom.workflowSortSelect = sortSelect;
+    this.dom.workflowStatsHeatmap = document.getElementById('workflow-stats-heatmap');
+    const savedQuery = this.currentWorkflowFilter?.query || '';
+    searchInput.value = savedQuery;
+    sortSelect.value = this.currentWorkflowFilter?.sort || 'newest';
+    const handler = debounce(() => {
+      this.currentWorkflowFilter = {
+        query: searchInput.value,
+        sort: sortSelect.value,
+      };
+      this.renderClinicalWorkflow();
+    }, 200);
+    searchInput.addEventListener('input', handler);
+    sortSelect.addEventListener('change', handler);
   }
   renderMissedCallsPanel() {
     const missedCallsContainer = document.getElementById('missed-calls-panel-container');
@@ -1877,7 +1974,20 @@ class AppController {
       </div>
     `;
   }
+  
+  openPatientForm() {
+    const overlay = document.getElementById('modal-add-patient');
+    if (overlay) {
+      document.querySelector('#modal-add-patient h3').innerText = "Create Patient Profile";
+      document.querySelector('#modal-add-patient button[type="submit"]').innerText = "Save Profile";
+      document.getElementById('form-add-patient').reset();
+      delete document.getElementById('form-add-patient').dataset.editId;
+      overlay.classList.add('active');
+    }
+  }
+
   openPatientDetail(patient) {
+    this.switchScreen('patients');
     this.selectedPatient = patient;
     this.dom.patientsListContainer.style.display = 'none';
     this.dom.patientsDetailContainer.style.display = 'block';
@@ -2184,7 +2294,253 @@ class AppController {
       }
       this.initiateCallSequence(this.selectedPatient);
     };
+    // Bind EMR tab switching
+    const tabBtns = document.querySelectorAll('.emr-tab-btn');
+    const tabPanes = document.querySelectorAll('.emr-tab-pane');
+    tabBtns.forEach(btn => {
+      btn.onclick = () => {
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabPanes.forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const target = btn.getAttribute('data-target');
+        const pane = document.getElementById(target);
+        if (pane) pane.classList.add('active');
+      };
+    });
+
+    // Bind add EMR record buttons
+    const addEmrBtns = document.querySelectorAll('.btn-add-emr-record');
+    addEmrBtns.forEach(btn => {
+      btn.onclick = () => {
+        const type = btn.getAttribute('data-type');
+        this.openEmrRecordModal(type, patient);
+      };
+    });
+
+    this.renderEmrTables(patient);
   }
+  
+  renderEmrTables(patient) {
+    const renderTable = (tbodyId, dataArray, renderRowStr) => {
+      const tbody = document.getElementById(tbodyId);
+      if (!tbody) return;
+      if (!dataArray || dataArray.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:20px; color:var(--text-muted);">No records found</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = dataArray.map(renderRowStr).join('');
+    };
+
+    renderTable('tbody-emr-vitals', patient.vitals, (v) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${v.date}</td>
+        <td style="padding: 12px;">${v.bloodPressure}</td>
+        <td style="padding: 12px;">${v.heartRate}</td>
+        <td style="padding: 12px;">${v.temperature}</td>
+        <td style="padding: 12px;">${v.weight}</td>
+      </tr>
+    `);
+
+    renderTable('tbody-emr-medical-history', patient.medicalHistory, (m) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${m.condition}</td>
+        <td style="padding: 12px;">${m.date}</td>
+        <td style="padding: 12px;">${m.status}</td>
+      </tr>
+    `);
+
+    renderTable('tbody-emr-family-history', patient.familyHistory, (f) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${f.relation}</td>
+        <td style="padding: 12px;">${f.condition}</td>
+        <td style="padding: 12px;">${f.date || 'N/A'}</td>
+      </tr>
+    `);
+
+    renderTable('tbody-emr-cows', patient.cowsAssessment, (c) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${c.date}</td>
+        <td style="padding: 12px; font-weight: bold; color: ${c.totalScore > 10 ? 'var(--accent-red)' : 'var(--text-primary)'}">${c.totalScore}</td>
+        <td style="padding: 12px;">${c.severity}</td>
+        <td style="padding: 12px;">${c.recordedBy || 'System'}</td>
+      </tr>
+    `);
+  }
+
+  openEmrRecordModal(type, patient) {
+    const overlay = document.getElementById('modal-emr-record');
+    const form = document.getElementById('form-emr-record');
+    const typeInput = document.getElementById('emr-record-type');
+    const dateEl = document.getElementById('emr-record-date');
+    const titleEl = document.getElementById('emr-modal-title');
+    const subtitleEl = document.getElementById('emr-modal-subtitle');
+    const iconContainer = document.getElementById('emr-modal-icon');
+    if (!overlay || !form) return;
+
+    // Reset all field groups
+    document.querySelectorAll('.emr-field-group').forEach(g => g.style.display = 'none');
+    form.reset();
+    typeInput.value = type;
+    dateEl.textContent = new Date().toISOString().split('T')[0];
+
+    // Configure modal based on type
+    const configs = {
+      vitals: {
+        title: 'Add Vitals Record',
+        subtitle: 'Record patient vital signs',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+        iconBg: 'rgba(238, 93, 80, 0.1)',
+        iconColor: 'var(--accent-red)'
+      },
+      medicalHistory: {
+        title: 'Add Medical History',
+        subtitle: 'Record a medical condition or diagnosis',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+        iconBg: 'rgba(79, 172, 254, 0.1)',
+        iconColor: 'var(--accent-blue)'
+      },
+      familyHistory: {
+        title: 'Add Family History',
+        subtitle: 'Record hereditary or family medical history',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        iconBg: 'rgba(139, 92, 246, 0.1)',
+        iconColor: 'var(--accent-purple)'
+      },
+      cowsAssessment: {
+        title: 'Add COWS Assessment',
+        subtitle: 'Clinical Opiate Withdrawal Scale evaluation',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+        iconBg: 'rgba(255, 152, 0, 0.1)',
+        iconColor: 'var(--accent-orange)'
+      }
+    };
+
+    const config = configs[type];
+    if (!config) return;
+
+    titleEl.textContent = config.title;
+    subtitleEl.textContent = config.subtitle;
+    iconContainer.innerHTML = config.icon;
+    iconContainer.style.background = config.iconBg;
+    iconContainer.style.color = config.iconColor;
+
+    // Show the correct field group
+    const fieldGroup = document.getElementById(`emr-fields-${type}`);
+    if (fieldGroup) fieldGroup.style.display = 'block';
+
+    // Toggle required on visible inputs only
+    document.querySelectorAll('.emr-field-group input[required], .emr-field-group select[required]').forEach(el => {
+      el.required = false;
+    });
+    if (fieldGroup) {
+      fieldGroup.querySelectorAll('input[type="text"], input[type="number"]').forEach(el => {
+        if (el.id !== 'emr-cows-severity') el.required = true;
+      });
+    }
+
+    // Open modal
+    overlay.classList.add('active');
+    // Focus first input after animation
+    setTimeout(() => {
+      const firstInput = fieldGroup?.querySelector('input:not([readonly]), select, textarea');
+      if (firstInput) firstInput.focus();
+    }, 150);
+
+    // Bind form submission (remove old listener by cloning)
+    const newForm = form.cloneNode(true);
+    form.parentNode.replaceChild(newForm, form);
+
+    // Re-bind COWS auto-severity after clone
+    const cowsScoreInput = document.getElementById('emr-cows-score');
+    const cowsSeverityInput = document.getElementById('emr-cows-severity');
+    if (cowsScoreInput && cowsSeverityInput) {
+      cowsScoreInput.addEventListener('input', () => {
+        const score = parseInt(cowsScoreInput.value, 10);
+        if (isNaN(score)) { cowsSeverityInput.value = '—'; return; }
+        if (score <= 4) cowsSeverityInput.value = 'No Withdrawal';
+        else if (score <= 12) cowsSeverityInput.value = 'Mild';
+        else if (score <= 24) cowsSeverityInput.value = 'Moderate';
+        else if (score <= 36) cowsSeverityInput.value = 'Moderately Severe';
+        else cowsSeverityInput.value = 'Severe';
+      });
+    }
+
+    // Bind close / cancel
+    const closeEmrModal = () => {
+      document.getElementById('modal-emr-record').classList.remove('active');
+    };
+    document.getElementById('btn-close-emr-modal')?.addEventListener('click', closeEmrModal);
+    document.getElementById('btn-cancel-emr-form')?.addEventListener('click', closeEmrModal);
+
+    newForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const activeRole = this.activeRole || window.CounselFlow.getActiveRole() || 'counsellor';
+      const entry = { date: new Date().toISOString().split('T')[0], recordedBy: activeRole };
+      const currentType = document.getElementById('emr-record-type').value;
+
+      if (currentType === 'vitals') {
+        entry.bloodPressure = document.getElementById('emr-vitals-bp').value || '120/80';
+        entry.heartRate = parseInt(document.getElementById('emr-vitals-hr').value, 10) || 0;
+        entry.temperature = parseFloat(document.getElementById('emr-vitals-temp').value) || 0;
+        entry.weight = parseFloat(document.getElementById('emr-vitals-weight').value) || 0;
+      } else if (currentType === 'medicalHistory') {
+        entry.condition = document.getElementById('emr-med-condition').value || 'Unknown';
+        entry.status = document.getElementById('emr-med-status').value || 'Active';
+      } else if (currentType === 'familyHistory') {
+        entry.relation = document.getElementById('emr-family-relation').value || 'N/A';
+        entry.condition = document.getElementById('emr-family-condition').value || 'Unknown';
+        entry.notes = document.getElementById('emr-family-notes').value || '';
+      } else if (currentType === 'cowsAssessment') {
+        const score = parseInt(document.getElementById('emr-cows-score').value, 10);
+        if (isNaN(score)) {
+          this.showToast('Invalid Input', 'COWS score must be a valid number.', 'error');
+          return;
+        }
+        entry.totalScore = score;
+        if (score <= 4) entry.severity = 'No Withdrawal';
+        else if (score <= 12) entry.severity = 'Mild';
+        else if (score <= 24) entry.severity = 'Moderate';
+        else if (score <= 36) entry.severity = 'Moderately Severe';
+        else entry.severity = 'Severe';
+      } else {
+        return;
+      }
+
+      // Disable submit button
+      const submitBtn = document.getElementById('btn-submit-emr-form');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div> Saving...';
+      }
+
+      try {
+        const API_URL = window.CounselFlow.API_BASE || 'http://localhost:5001/api';
+        const res = await fetch(`${API_URL}/patients/${patient.id}/records/${currentType}`, {
+          method: 'PUT',
+          headers: window.CounselFlow.getAuthHeaders ? window.CounselFlow.getAuthHeaders() : { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entry)
+        });
+        if (res.ok) {
+          closeEmrModal();
+          this.showToast('Record Added', 'New EMR record added successfully.', 'success');
+          await this.refreshData();
+          const updatedPatient = this.patients.find(p => p.id === patient.id);
+          if (updatedPatient) this.openPatientDetail(updatedPatient);
+        } else {
+          this.showToast('Error', 'Failed to add EMR record. Server returned an error.', 'error');
+        }
+      } catch(err) {
+        console.error('EMR save error:', err);
+        this.showToast('Error', 'Could not connect to server. Please try again.', 'error');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Save Record';
+        }
+      }
+    });
+  }
+
   async savePatientNotes() {
     if (!this.selectedPatient) return;
     const textVal = document.getElementById('patient-notes-textarea').value;

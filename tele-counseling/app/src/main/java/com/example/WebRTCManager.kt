@@ -5,11 +5,10 @@ import android.media.AudioManager
 import android.util.Log
 import io.livekit.android.LiveKit
 import io.livekit.android.room.Room
-
 import io.livekit.android.room.track.LocalAudioTrack
-import io.livekit.android.room.track.Track
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -28,6 +27,7 @@ class WebRTCManager(
         fun onLocalIceCandidate(candidateSdp: String, sdpMid: String, sdpMLineIndex: Int)
         fun onTrackAdded()
         fun onError(message: String)
+        fun onTranscription(text: String, speaker: String)
     }
 
     private var room: Room? = null
@@ -37,13 +37,19 @@ class WebRTCManager(
     private var previousSpeakerphoneOn: Boolean = false
     private val client = OkHttpClient()
 
+    var socket: io.socket.client.Socket? = null
+        private set
+
+    private var roomName: String? = null
+
     init {
         listener.onWebRTCLog("LiveKit: Manager initialized.")
     }
 
     fun prepareCall(offerSdp: String, isCounselor: Boolean, onAnswerCreated: (String) -> Unit) {
+        this.roomName = offerSdp
         listener.onWebRTCLog("LiveKit: Preparing call for room: $offerSdp")
-        
+
         try {
             audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             audioManager?.let { am ->
@@ -53,7 +59,7 @@ class WebRTCManager(
                 am.isSpeakerphoneOn = true
                 listener.onWebRTCLog("LiveKit: AudioManager configured for speakerphone.")
             }
-            
+
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     listener.onWebRTCLog("LiveKit: Fetching token for room $offerSdp...")
@@ -68,14 +74,14 @@ class WebRTCManager(
                         .addHeader("X-Requested-With", "XMLHttpRequest")
                         .post(body)
                         .build()
-                    
+
                     val response = client.newCall(request).execute()
                     if (!response.isSuccessful) {
                         val err = response.body?.string() ?: "Unknown error"
                         withContext(Dispatchers.Main) { listener.onError("Failed to fetch token: $err") }
                         return@launch
                     }
-                    
+
                     val resJson = JSONObject(response.body?.string() ?: "{}")
                     val token = resJson.optString("token")
                     val livekitUrl = resJson.optString("url", "wss://ai-assistant-ommd272n.livekit.cloud")
@@ -83,37 +89,49 @@ class WebRTCManager(
                         withContext(Dispatchers.Main) { listener.onError("Token is empty") }
                         return@launch
                     }
-                    
+
                     withContext(Dispatchers.Main) {
                         listener.onWebRTCLog("LiveKit: Token received, connecting to LiveKit cloud...")
                         room = LiveKit.create(context)
                         CoroutineScope(Dispatchers.Main).launch {
                             room?.events?.events?.collect { event ->
-                                if (event is io.livekit.android.events.RoomEvent.TrackSubscribed) {
-                                    listener.onWebRTCLog("LiveKit: Remote track subscribed!")
-                                    listener.onTrackAdded()
+                                when (event) {
+                                    is io.livekit.android.events.RoomEvent.TrackSubscribed -> {
+                                        listener.onWebRTCLog("LiveKit: Remote track subscribed!")
+                                        listener.onTrackAdded()
+                                    }
+                                    is io.livekit.android.events.RoomEvent.TrackPublished -> {
+                                        listener.onWebRTCLog("LiveKit: Track published")
+                                    }
+                                    is io.livekit.android.events.RoomEvent.ParticipantDisconnected -> {
+                                        listener.onWebRTCLog("LiveKit: Participant disconnected")
+                                    }
+                                    else -> {}
                                 }
                             }
                         }
-                        
+
                         CoroutineScope(Dispatchers.IO).launch {
                             try {
                                 room?.connect(livekitUrl, token)
                                 withContext(Dispatchers.Main) {
                                     listener.onWebRTCLog("LiveKit: Connected to room!")
-                                    
-                                    // Create and publish local mic track
-                                    localAudioTrack = room?.localParticipant?.createAudioTrack("mic")
-                                    localAudioTrack?.let {
-                                        localAudioTrack?.start()
-                                        CoroutineScope(Dispatchers.IO).launch {
-                                            try {
-                                                room?.localParticipant?.publishAudioTrack(it)
-                                                withContext(Dispatchers.Main) {
-                                                    listener.onWebRTCLog("LiveKit: Published local microphone.")
+
+                                    if (isCounselor) {
+                                        listener.onWebRTCLog("LiveKit: Counselor - waiting for patient to join...")
+                                    } else {
+                                        localAudioTrack = room?.localParticipant?.createAudioTrack("mic")
+                                        localAudioTrack?.let {
+                                            localAudioTrack?.start()
+                                            CoroutineScope(Dispatchers.IO).launch {
+                                                try {
+                                                    room?.localParticipant?.publishAudioTrack(it)
+                                                    withContext(Dispatchers.Main) {
+                                                        listener.onWebRTCLog("LiveKit: Published local microphone.")
+                                                    }
+                                                } catch (e: Exception) {
+                                                    withContext(Dispatchers.Main) { listener.onError("Failed to publish mic: ${e.message}") }
                                                 }
-                                            } catch (e: Exception) {
-                                                withContext(Dispatchers.Main) { listener.onError("Failed to publish mic: ${e.message}") }
                                             }
                                         }
                                     }
@@ -122,8 +140,7 @@ class WebRTCManager(
                                 withContext(Dispatchers.Main) { listener.onError("LiveKit connection failed: ${e.message}") }
                             }
                         }
-                        
-                        // Return dummy answer to SignalingClient
+
                         onAnswerCreated("livekit-connected")
                     }
                 } catch (e: Exception) {
@@ -139,14 +156,33 @@ class WebRTCManager(
         // No-op for LiveKit (SFU handles routing)
     }
 
+    fun setSocket(sock: io.socket.client.Socket) {
+        this.socket = sock
+    }
+
+    fun sendTranscription(text: String, speaker: String) {
+        try {
+            val json = JSONObject().apply {
+                put("roomName", roomName)
+                put("text", text)
+                put("speaker", speaker)
+                put("timestamp", System.currentTimeMillis().toString())
+            }
+            socket?.emit("transcription", json)
+            Log.d("WebRTCManager", "Sent transcription for room $roomName")
+        } catch (e: Exception) {
+            Log.e("WebRTCManager", "Error sending transcription", e)
+        }
+    }
+
     fun close() {
         try {
             room?.disconnect()
             room = null
-            
+
             localAudioTrack?.dispose()
             localAudioTrack = null
-            
+
             audioManager?.let { am ->
                 am.mode = previousAudioMode
                 am.isSpeakerphoneOn = previousSpeakerphoneOn

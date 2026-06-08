@@ -223,12 +223,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   
-  function getLocalCounselors() {
+  async function getLocalCounselors() {
     let local = [];
     try {
+      if (navigator.onLine) {
+        const res = await fetch(`${window.CounselFlow.API_BASE}/counselors`);
+        if (res.ok) {
+          local = await res.json();
+          localStorage.setItem('counseling_counselors', JSON.stringify(local));
+        }
+      } else {
+        const stored = localStorage.getItem('counseling_counselors');
+        if (stored) local = JSON.parse(stored);
+      }
+    } catch(e) {
+      console.warn("Failed to fetch counselors from backend:", e);
       const stored = localStorage.getItem('counseling_counselors');
       if (stored) local = JSON.parse(stored);
-    } catch(e) {}
+    }
     
     // Merge with DEMO_CREDENTIALS
     const base = window.CounselFlow.DEMO_CREDENTIALS.filter(c => c.roleKey === 'counsellor' || c.roleKey === 'ddrc').map(c => ({
@@ -253,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return base;
   }
   
-  function saveLocalCounselor(data) {
+  async function saveLocalCounselor(data) {
      let local = [];
      try {
        const stored = localStorage.getItem('counseling_counselors');
@@ -265,9 +277,21 @@ document.addEventListener('DOMContentLoaded', () => {
      else local.push(data);
      
      localStorage.setItem('counseling_counselors', JSON.stringify(local));
+     
+     if (navigator.onLine) {
+       try {
+         await fetch(`${window.CounselFlow.API_BASE}/counselors`, {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+           body: JSON.stringify([data])
+         });
+       } catch (err) {
+         console.error("Failed to sync counselor to backend:", err);
+       }
+     }
   }
   
-  function deleteLocalCounselor(id) {
+  async function deleteLocalCounselor(id) {
      let local = [];
      try {
        const stored = localStorage.getItem('counseling_counselors');
@@ -276,6 +300,17 @@ document.addEventListener('DOMContentLoaded', () => {
      
      local = local.filter(l => l.id !== id);
      localStorage.setItem('counseling_counselors', JSON.stringify(local));
+     
+     if (navigator.onLine) {
+       try {
+         await fetch(`${window.CounselFlow.API_BASE}/counselors/${id}`, {
+           method: 'DELETE',
+           headers: { 'X-Requested-With': 'XMLHttpRequest' }
+         });
+       } catch (err) {
+         console.error("Failed to delete counselor from backend:", err);
+       }
+     }
   }
 
   function renderUI() {
@@ -371,7 +406,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function renderCounselorsProfileUI() {
-    let counselors = getLocalCounselors();
+    let counselors = await getLocalCounselors();
 
     const activeRole = getActiveRole();
     const staffId = window.CounselFlow.safeGetItem('counseling_logged_in_staff') || '';
@@ -456,7 +491,7 @@ document.addEventListener('DOMContentLoaded', () => {
     gridContainer.innerHTML = html;
   }
 
-  container.addEventListener('click', (e) => {
+  container.addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (!action) return;
     const id = e.target.closest('[data-id]')?.dataset.id;
@@ -486,7 +521,8 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('counselor-form-modal').style.display = 'flex';
       document.getElementById('counselor-overlay').style.display = 'block';
     } else if (action === 'edit-counselor' && id) {
-      const c = getLocalCounselors().find(x => x.id === id);
+      const counselors = await getLocalCounselors();
+      const c = counselors.find(x => x.id === id);
       if (!c) return;
       document.getElementById('counselor-profile-form').reset();
       Object.keys(c).forEach(k => {
@@ -497,7 +533,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('counselor-overlay').style.display = 'block';
     } else if (action === 'delete-counselor' && id) {
       if (confirm('Are you sure you want to delete this counselor profile? This action cannot be undone.')) {
-         deleteLocalCounselor(id);
+         await deleteLocalCounselor(id);
          window.CounselFlow.writeAuditEvent('COUNSELOR_PROFILE_DELETED', id, 'N/A', getActiveRole(), 'Deleted counselor profile via Profiles Management');
          renderUI();
       }
@@ -516,7 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
        data.id = data.staffId || ('C-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
     }
     
-    saveLocalCounselor(data);
+    await saveLocalCounselor(data);
     window.CounselFlow.writeAuditEvent('COUNSELOR_PROFILE_UPDATED', data.id, 'N/A', getActiveRole(), 'Updated counselor profile via Profiles Management');
     
     document.getElementById('counselor-form-modal').style.display = 'none';

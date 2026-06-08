@@ -6,5 +6,10 @@ data class PatientData(
     val status: String?,
     val severity: String?,
     val avatarColor: String?,
-    val progress: Int?
+    val progress: Int?,
+    val phone: String? = null,
+    val addictionCategory: String? = null,
+    val assignedCounselor: String? = null,
+    val cravingsIntensity: Int? = null,
+    val nextOpdVisitDate: String? = null
 )

@@ -67,6 +67,7 @@ fun MainScreen(viewModel: CallViewModel) {
     val userRole by viewModel.userRole.collectAsState()
     val callerName by viewModel.callerName.collectAsState()
     val durationSeconds by viewModel.durationSeconds.collectAsState()
+    val transcript by viewModel.transcript.collectAsState()
 
     val context = LocalContext.current
 
@@ -184,13 +185,14 @@ fun MainScreen(viewModel: CallViewModel) {
                             )
                         }
 
-                        CallState.ACTIVE -> {
-                            ActiveCallView(
-                                callerName = callerName,
-                                durationSeconds = durationSeconds,
-                                onEndCall = { viewModel.endCall() }
-                            )
-                        }
+CallState.ACTIVE -> {
+                             ActiveCallView(
+                                 callerName = callerName,
+                                 durationSeconds = durationSeconds,
+                                 onEndCall = { viewModel.endCall() },
+                                 transcript = transcript
+                             )
+                         }
 
                         CallState.ERROR -> {
                             ErrorStateView(onReset = { viewModel.disconnect() })
@@ -543,27 +545,70 @@ fun IncomingCallView(callerName: String, onAnswer: () -> Unit, onReject: () -> U
 }
 
 @Composable
-fun ActiveCallView(callerName: String, durationSeconds: Int, onEndCall: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
-        shape = RoundedCornerShape(24.dp)
-    ) {
-        Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("In Call With", color = Color(0xFF2DD4BF), fontSize = 14.sp)
-            Text(callerName, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+fun ActiveCallView(callerName: String, durationSeconds: Int, onEndCall: () -> Unit, transcript: List<com.example.TranscriptLine> = emptyList()) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
+            shape = RoundedCornerShape(24.dp)
+        ) {
+            Column(modifier = Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("In Call With", color = Color(0xFF2DD4BF), fontSize = 14.sp)
+                Text(callerName, color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(8.dp))
+                val mins = durationSeconds / 60
+                val secs = durationSeconds % 60
+                Text(String.format("%02d:%02d", mins, secs), color = Color.White, fontSize = 20.sp)
+                Spacer(Modifier.height(32.dp))
+                Button(
+                    onClick = onEndCall,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text("End Call", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        if (transcript.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            Text("Live Transcript", color = Color(0xFFCBD5E1), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            val mins = durationSeconds / 60
-            val secs = durationSeconds % 60
-            Text(String.format("%02d:%02d", mins, secs), color = Color.White, fontSize = 20.sp)
-            Spacer(Modifier.height(32.dp))
-            Button(
-                onClick = onEndCall,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
-                shape = RoundedCornerShape(16.dp)
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                reverseLayout = true
             ) {
-                Text("End Call", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                items(transcript.reversed()) { line ->
+                    val isCounselor = line.speaker == "Counselor"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = if (isCounselor) Arrangement.End else Arrangement.Start
+                    ) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isCounselor) Color(0xFF3B82F6) else Color(0xFF334155)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    "${line.speaker}: ${line.text}",
+                                    color = Color.White,
+                                    fontSize = 12.sp
+                                )
+                                Text(
+                                    line.timestamp,
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
     }

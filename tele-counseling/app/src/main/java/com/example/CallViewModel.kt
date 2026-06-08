@@ -33,6 +33,10 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs: SharedPreferences = application.getSharedPreferences("AppPreferences", Context.MODE_PRIVATE)
 
+    // Transcription state
+    private val _transcript = MutableStateFlow<List<TranscriptLine>>(emptyList())
+    val transcript: StateFlow<List<TranscriptLine>> = _transcript.asStateFlow()
+
     private val _serverUrl = MutableStateFlow(
         prefs.getString("serverUrl", "https://altitude-quintuple-compile.ngrok-free.dev") ?: "https://altitude-quintuple-compile.ngrok-free.dev"
     )
@@ -68,12 +72,13 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
 
     private val httpClient = OkHttpClient()
 
-    // Temp variables for the incoming call
     private var savedCallerId: String? = null
     private var savedOfferSdp: String? = null
 
-    // Call duration timer job
     private var timerJob: Job? = null
+    private var incomingPatientId: String? = null
+    private var incomingPatientName: String? = null
+    private var incomingRoomName: String? = null
 
     init {
         addLog("Application ready. Configure backend server url to start client.")
@@ -256,6 +261,23 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 override fun onError(message: String) {
                     addLog("Signaling Error: $message")
                 }
+
+                override fun onIncomingCall(patientId: String, patientName: String, roomName: String) {
+                    addLog("Signaling: Incoming call notification from patient '$patientName' (ID: $patientId)")
+                    incomingPatientId = patientId
+                    incomingPatientName = patientName
+                    incomingRoomName = roomName
+                    _callerName.value = patientName
+                    _callState.value = CallState.INCOMING
+                }
+
+                override fun onTranscription(text: String, speaker: String) {
+                    addLog("Transcription received: $speaker - $text")
+                    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                    viewModelScope.launch {
+                        _transcript.value = _transcript.value + TranscriptLine(speaker, text, time)
+                    }
+                }
             }
         )
         signalingClient?.connect()
@@ -264,15 +286,16 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     fun answerCall() {
         if (_callState.value != CallState.INCOMING) return
 
-        val offerSdp = savedOfferSdp
-        val callerId = savedCallerId ?: ""
-        if (offerSdp == null || callerId.isBlank()) {
+        val offerSdp = savedOfferSdp ?: incomingRoomName
+        val callerId = savedCallerId ?: incomingPatientId
+        val roomName = offerSdp
+        if (offerSdp == null) {
             addLog("Error: Cannot answer call. Missing offer or caller ID.")
             return
         }
 
         addLog("Answering Call... Initializing WebRTC client.")
-        
+
         // Setup WebRTCManager
         webRTCManager = WebRTCManager(
             context = getApplication(),
@@ -283,7 +306,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 override fun onLocalIceCandidate(candidateSdp: String, sdpMid: String, sdpMLineIndex: Int) {
-                    signalingClient?.emitIceCandidate(callerId, candidateSdp, sdpMid, sdpMLineIndex)
+                    callerId?.let { signalingClient?.emitIceCandidate(it, candidateSdp, sdpMid, sdpMLineIndex) }
                 }
 
                 override fun onTrackAdded() {
@@ -293,12 +316,19 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
                 override fun onError(message: String) {
                     addLog("WebRTC Error: $message")
                 }
+
+                override fun onTranscription(text: String, speaker: String) {
+                    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                    _transcript.value = _transcript.value + TranscriptLine(speaker, text, time)
+                }
             }
         )
 
+        webRTCManager?.setSocket(signalingClient?.socket)
+
         // WebRTC preparation & answer emission
         webRTCManager?.prepareCall(offerSdp, _userRole.value == "counselor") { answerSdp ->
-            signalingClient?.emitAnswer(callerId, answerSdp)
+            callerId?.let { signalingClient?.emitAnswer(it, answerSdp) }
             _callState.value = CallState.ACTIVE
             startTimer()
         }

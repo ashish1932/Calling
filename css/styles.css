@@ -1754,6 +1754,47 @@ header {
   gap: 4px;
 }
 
+.workflow-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 15px;
+  background: var(--bg-card);
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+}
+
+.workflow-toolbar-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.workflow-toolbar-actions input,
+.workflow-toolbar-actions select {
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.workflow-toolbar-actions input {
+  width: 200px;
+}
+
+.workflow-stats-heatmap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .workflow-board {
   display: flex;
   gap: 24px;
@@ -1823,6 +1864,55 @@ header {
   background: var(--bg-row-hover);
   color: var(--text-primary);
   border: 1px solid var(--border-light);
+}
+
+.workflow-column-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.workflow-cards-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.workflow-maintenance-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-card);
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  margin-bottom: 8px;
+}
+
+.workflow-signoff-buttons {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.workflow-signoff-btn {
+  font-size: 9px;
+  padding: 4px;
+}
+
+.workflow-re-enroll-btn {
+  font-size: 11px;
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+  background: rgba(0, 242, 254, 0.05);
+}
+
+.workflow-no-family-warning {
+  font-size: 10px;
+  color: var(--accent-orange);
+  margin-top: 4px;
+  font-weight: bold;
 }
 
 .workflow-card {
@@ -1899,6 +1989,11 @@ header {
   color: var(--text-primary);
 }
 
+.workflow-check-item.workflow-read-only {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .workflow-check-item input[type="checkbox"] {
   width: 14px;
   height: 14px;
@@ -1937,11 +2032,20 @@ header {
   background: rgba(16, 185, 129, 0.2);
 }
 
-.workflow-card-nav:hover, .workflow-card-nav:focus {
-  color: var(--accent-blue) !important;
-  text-decoration: underline !important;
+.workflow-card-nav {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.workflow-card-nav:hover,
+.workflow-card-nav:focus {
+  color: var(--accent-blue);
   outline: 2px solid var(--accent-blue);
   outline-offset: 2px;
+}
+
+.workflow-card-interactive {
+  pointer-events: auto;
 }
 
 /* ==========================================
@@ -2059,4 +2163,38 @@ header {
   display: none !important;
 }
 
+/* EMR Tab Styling */
+.emr-tab-btn {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 13px;
+}
 
+.emr-tab-btn:hover {
+  background: var(--bg-item-hover);
+  color: var(--text-primary);
+}
+
+.emr-tab-btn.active {
+  background: rgba(79, 172, 254, 0.1);
+  color: var(--accent-blue);
+  font-weight: 600;
+  border-left: 3px solid var(--accent-blue);
+}
+
+.emr-tab-pane {
+  display: none;
+  animation: fadeIn 0.3s;
+}
+
+.emr-tab-pane.active {
+  display: block;
+}

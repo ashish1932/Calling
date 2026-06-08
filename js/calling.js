@@ -149,70 +149,94 @@ class CallManager {
         this.endCall();
       });
 
-      this.socket.on('dashboard-observe-call', async (data) => {
-        if (!this.room && data.roomName) {
-            console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
-            try {
-                const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
-                const resp = await fetch('/api/livekit/token', {
-                    method: 'POST',
-                    headers: { 
-                      'Content-Type': 'application/json',
-                      'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
-                      'X-Requested-With': 'XMLHttpRequest'
-                    },
-                    body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
-                });
-                const tokenData = await resp.json();
-                if (tokenData.token && window.LivekitClient) {
-                    this.isActive = true;
-                    this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
-                    window.CounselFlow.app.switchScreen('call-console');
-                    this.duration = 0;
-                    this.timerInterval = setInterval(() => {
-                      this.duration++;
-                      const hrs = Math.floor(this.duration / 3600).toString();
-                      const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
-                      const secs = (this.duration % 60).toString().padStart(2, '0');
-                      const timerEl = document.getElementById('call-duration-timer');
-                      if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
-                    }, 1000);
-                    
-                    this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
-                    this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-                        if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
-                            const element = track.attach();
-                            document.body.appendChild(element);
-                            if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
-                            
-                            const stream = new MediaStream([track.mediaStreamTrack]);
-                            const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-                            if (speakerName === "Counselor") {
-                                this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
-                            } else {
-                                this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
-                            }
-                        }
-                    });
-                    this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
-                        console.log('[LiveKit] Participant disconnected:', participant.identity);
-                        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
-                        this.endCall();
-                    });
-                    
-                    this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
-                        console.log('[LiveKit] Room disconnected.');
-                        this.endCall();
-                    });
+this.socket.on('dashboard-observe-call', async (data) => {
+         if (!this.room && data.roomName) {
+             console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
+             try {
+                 const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                 const resp = await fetch('/api/livekit/token', {
+                     method: 'POST',
+                     headers: { 
+                       'Content-Type': 'application/json',
+                       'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                       'X-Requested-With': 'XMLHttpRequest'
+                     },
+                     body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                 });
+                 const tokenData = await resp.json();
+                 if (tokenData.token && window.LivekitClient) {
+                     this.isActive = true;
+                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
+                     window.CounselFlow.app.switchScreen('call-console');
+                     this.duration = 0;
+                     this.timerInterval = setInterval(() => {
+                       this.duration++;
+                       const hrs = Math.floor(this.duration / 3600).toString();
+                       const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                       const secs = (this.duration % 60).toString().padStart(2, '0');
+                       const timerEl = document.getElementById('call-duration-timer');
+                       if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                     }, 1000);
+                     
+                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                         if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                             const element = track.attach();
+                             document.body.appendChild(element);
+                             if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                             
+                             const stream = new MediaStream([track.mediaStreamTrack]);
+                             const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                             if (speakerName === "Counselor") {
+                                 this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
+                             } else {
+                                 this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
+                             }
+                         }
+                     });
+                     this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                         console.log('[LiveKit] Participant disconnected:', participant.identity);
+                         window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                         this.endCall();
+                     });
+                     
+                     this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                         console.log('[LiveKit] Room disconnected.');
+                         this.endCall();
+                     });
 
-                    await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
-                    window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
-                }
-            } catch (err) {
-                console.error('[LiveKit] Failed to observe call:', err);
-            }
-        }
-      });
+                     // Listen for transcription from mobile clients
+                     this.socket.on('transcription', (transcriptData) => {
+                         if (transcriptData && transcriptData.roomName === data.roomName && transcriptData.text) {
+                             const speaker = transcriptData.speaker === 'counselor' ? 'Counselor' : 'Patient';
+                             this.addTranscriptLine(speaker, transcriptData.text);
+                         }
+                     });
+
+                     await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                     window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                 }
+             } catch (err) {
+                 console.error('[LiveKit] Failed to observe call:', err);
+             }
+         }
+       });
+
+       // Handle inbound call notifications (patient calling counselor)
+       this.socket.on('incoming-call', (data) => {
+         console.log('[WebRTC] Incoming call from patient:', data.patientName || data.patientId);
+         if (!this.isActive) {
+           this.showIncomingCallPopup(data.patientId, data.patientName, data.roomName);
+         }
+       });
+
+       // Handle transcript updates during LiveKit calls
+       this.socket.on('transcript-update', (data) => {
+         if (data && data.text && this.isActive) {
+           const speaker = data.sender === 'counselor' ? 'Counselor' : 'Patient';
+           this.addTranscriptLine(speaker, data.text);
+         }
+       });
     } else {
       console.warn("Socket.io is not loaded.");
     }
@@ -1267,13 +1291,73 @@ class CallManager {
         holdBtn.style.marginRight = '8px';
         holdBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`;
         
-        // Append hold button in the controls row before record button
         const recordBtn = document.getElementById('btn-call-record');
         controls.insertBefore(holdBtn, recordBtn);
         
         holdBtn.addEventListener('click', () => this.toggleHold());
       }
     }
+  }
+
+  showIncomingCallPopup(patientId, patientName, roomName) {
+    const existingPopup = document.getElementById('incoming-call-popup');
+    if (existingPopup) existingPopup.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'incoming-call-popup';
+    popup.style.cssText = [
+      'position: fixed',
+      'top: 0',
+      'left: 0',
+      'right: 0',
+      'bottom: 0',
+      'background: rgba(0,0,0,0.8)',
+      'z-index: 10000',
+      'display: flex',
+      'align-items: center',
+      'justify-content: center',
+      'flex-direction: column'
+    ].join(';');
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background: rgb(30,41,59)',
+      'border-radius: 16px',
+      'padding: 32px',
+      'text-align: center',
+      'max-width: 320px',
+      'width: 90%',
+      'border: 2px solid rgb(45,212,191)'
+    ].join(';');
+    card.innerHTML = `
+      <div style="color: rgb(45,212,191); font-size: 18px; font-weight: bold; margin-bottom: 16px;">INCOMING CALL</div>
+      <div style="color: white; font-size: 24px; font-weight: bold; margin-bottom: 8px;">${escapeHtml(patientName || patientId)}</div>
+      <div style="color: rgb(148,163,184); font-size: 14px; margin-bottom: 24px;">Patient is calling for counseling</div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button id="btn-answer-call" style="background: rgb(34,197,94); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Answer</button>
+        <button id="btn-decline-call" style="background: rgb(239,68,68); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Decline</button>
+      </div>
+    `;
+    popup.appendChild(card);
+    document.body.appendChild(popup);
+
+    const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+    const playAudio = () => {
+      audio.play().catch(() => {});
+    };
+    playAudio();
+    const audioInterval = setInterval(playAudio, 2000);
+
+    document.getElementById('btn-answer-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      this.initLiveKit({ id: patientId, name: patientName, counselorId: 'counselor' });
+    };
+    document.getElementById('btn-decline-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      window.CounselFlow.app.showToast('Call Declined', 'Patient call declined.', 'info');
+    };
   }
 
   // Stop active scenario loops if user navigates away (Architecture #43)

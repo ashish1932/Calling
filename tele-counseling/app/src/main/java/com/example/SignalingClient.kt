@@ -18,19 +18,18 @@ class SignalingClient(
         fun onIceCandidateReceived(candidateSdp: String, sdpMid: String, sdpMLineIndex: Int)
         fun onHangupReceived()
         fun onError(message: String)
+        fun onIncomingCall(patientId: String, patientName: String, roomName: String)
+        fun onTranscription(text: String, speaker: String)
     }
 
     private var socket: Socket? = null
 
     fun connect() {
         var formattedUrl = backendUrl.trim()
-        
-        // Use the raw URL for Socket.IO, as Node.js backend uses root namespace
 
         clientListener.onConnectionStatusChanged("Signaling: Connecting to $formattedUrl...")
-        
+
         try {
-            // Set up IO Options if needed, we'll keep it standard
             val options = IO.Options().apply {
                 forceNew = true
                 reconnection = true
@@ -60,7 +59,7 @@ class SignalingClient(
                         val from = data.getString("socket")
                         val offerObj = data.getJSONObject("offer")
                         val offerSdp = offerObj.optString("roomName", offerObj.optString("sdp", ""))
-                        
+
                         val callerInfo = data.optJSONObject("callerInfo")
                         val callerName = callerInfo?.optString("name") ?: "Counselor"
 
@@ -82,6 +81,36 @@ class SignalingClient(
                     }
                 } catch (e: Exception) {
                     clientListener.onError("Handoff parsing error: ${e.localizedMessage}")
+                }
+            }
+
+            socket?.on("incoming-call") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val patientId = data.getString("patientId")
+                        val patientName = data.optString("patientName", "Unknown Patient")
+                        val roomName = data.getString("roomName")
+                        clientListener.onIncomingCall(patientId, patientName, roomName)
+                    }
+                } catch (e: Exception) {
+                    clientListener.onError("Incoming call parsing error: ${e.localizedMessage}")
+                }
+            }
+
+            socket?.on("transcription") { args ->
+                try {
+                    if (args.isNotEmpty()) {
+                        val data = args[0] as JSONObject
+                        val roomName = data.optString("roomName", "")
+                        val text = data.optString("text", "")
+                        val speaker = data.optString("speaker", "patient")
+                        if (text.isNotBlank()) {
+                            clientListener.onTranscription(text, if (speaker == "counselor") "Counselor" else "Patient")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("SignalingClient", "Transcription parsing error", e)
                 }
             }
 
@@ -165,6 +194,21 @@ class SignalingClient(
             Log.d("SignalingClient", "Emitted SDP Answer to counselor: $to")
         } catch (e: Exception) {
             clientListener.onError("Emitting answer failed: ${e.localizedMessage}")
+        }
+    }
+
+    fun emitIncomingCall(to: String, roomName: String, patientName: String) {
+        try {
+            val data = JSONObject().apply {
+                put("to", to)
+                put("from", userId)
+                put("roomName", roomName)
+                put("patientName", patientName)
+            }
+            socket?.emit("incoming-call", data)
+            Log.d("SignalingClient", "Emitted incoming-call for patient to counselor: $to")
+        } catch (e: Exception) {
+            Log.e("SignalingClient", "Emitting incoming-call error", e)
         }
     }
 

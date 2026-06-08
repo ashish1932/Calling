@@ -35,7 +35,11 @@ const PatientSchema = new mongoose.Schema({
     resolved: Boolean,
     resolvedBy: String,
     resolvedAt: String
-  }
+  },
+  vitals: [mongoose.Schema.Types.Mixed],
+  medicalHistory: [mongoose.Schema.Types.Mixed],
+  familyHistory: [mongoose.Schema.Types.Mixed],
+  cowsAssessment: [mongoose.Schema.Types.Mixed]
 }, { timestamps: true, strict: true });
 
 const CallLogSchema = new mongoose.Schema({
@@ -73,6 +77,19 @@ const CounselorSchema = new mongoose.Schema({
   avatar: String
 }, { timestamps: true, strict: true });
 
+const MedicineSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  name: { type: String, required: true, unique: true },
+  stock: { type: Number, default: 0 },
+  unit: { type: String, default: 'Tablets' },
+  expiryDate: String,
+  lowStockThreshold: { type: Number, default: 50 },
+  defaultQuantity: Number,
+  defaultFrequency: String, // Daily/Weekly/Monthly
+  defaultDuration: Number, // days between visits
+  category: String, // Opioid/Anxiety/etc
+});
+
 const MedicationLogSchema = new mongoose.Schema({
   logId: { type: String, required: true, unique: true },
   patientId: String,
@@ -80,13 +97,31 @@ const MedicationLogSchema = new mongoose.Schema({
   medicineName: String,
   quantity: Number,
   nextVisitDate: String,
-  uploadedBy: String
+  uploadedBy: String,
+  dispensedBy: String,
+  status: { type: String, default: 'dispensed' }, // pending/dispensed/missed
+  signature: String,
+  photoVerified: Boolean,
+  notes: String,
+  batchSource: String
 }, { timestamps: true, strict: false });
+
+const OpdVisitSchema = new mongoose.Schema({
+  visitId: { type: String, required: true, unique: true },
+  patientId: String,
+  date: String,
+  time: String,
+  status: String, // Waiting, In Progress, Completed
+  priority: String,
+  isWalkIn: Boolean
+}, { timestamps: true });
 
 module.exports = {
   Patient: mongoose.model('Patient', PatientSchema),
   CallLog: mongoose.model('CallLog', CallLogSchema),
   AuditTrail: mongoose.model('AuditTrail', AuditTrailSchema),
   Counselor: mongoose.model('Counselor', CounselorSchema),
-  MedicationLog: mongoose.model('MedicationLog', MedicationLogSchema)
+  MedicationLog: mongoose.model('MedicationLog', MedicationLogSchema),
+  Medicine: mongoose.model('Medicine', MedicineSchema),
+  OpdVisit: mongoose.model('OpdVisit', OpdVisitSchema)
 };

@@ -1047,13 +1047,17 @@ async function savePatients(patients) {
   
   if (navigator.onLine) {
     try {
-      await fetch(`${API_BASE}/patients`, {
+      const res = await fetch(`${API_BASE}/patients`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify(patients)
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
     } catch (err) {
       console.error("Failed to sync patients to backend:", err);
+      if (window.CounselFlow && window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
+        window.CounselFlow.app.showToast("Sync Error", "Failed to save patients to backend.", "error");
+      }
     }
   }
 }
