@@ -1,0 +1,10 @@
+version: "2"
+tunnels:
+  web:
+    proto: http
+    addr: 3001
+    domain: altitude-quintuple-compile.ngrok-free.dev
+  expo:
+    proto: http
+    addr: 8081
+    host_header: rewrite

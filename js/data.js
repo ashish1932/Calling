@@ -46,9 +46,9 @@ window.CounselFlow.CONFIG = {
   GEMINI_API_KEY: "",
   AI_PROVIDER: (() => {
     try {
-      return window.localStorage.getItem("counseling_ai_provider") || "groq";
+      return window.localStorage.getItem("counseling_ai_provider") || "gemini";
     } catch (e) {
-      return "groq";
+      return "gemini";
     }
   })(),
   DEFAULT_SETTINGS: {

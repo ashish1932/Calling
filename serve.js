@@ -25,6 +25,8 @@ const MIME_TYPES = {
   '.woff' : 'font/woff',
   '.ttf'  : 'font/ttf',
   '.mp3'  : 'audio/mpeg',
+  '.webm' : 'audio/webm',
+  '.m4a'  : 'audio/x-m4a',
 };
 
 function resolveStaticPath(requestPath) {

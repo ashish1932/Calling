@@ -143,6 +143,7 @@ export default function App() {
   const [showReconnect, setShowReconnect] = useState(false);
   const [patients, setPatients] = useState([]);
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
   
   // Interactive feature states
   const [activeModal, setActiveModal] = useState(null); // 'breathing', 'mood', 'chat', 'reminder', null
@@ -209,6 +210,18 @@ export default function App() {
     return false;
   };
 
+  const cleanTranscriptForLanguage = (text, lang) => {
+    if (!text) return '';
+    if (lang === 'hi') {
+      let cleaned = text.replace(/[\u0A00-\u0A7F]/g, '');
+      if (!/[\u0900-\u097F]/.test(cleaned)) {
+        return '';
+      }
+      return cleaned.trim();
+    }
+    return text;
+  };
+
   const logErrorToServer = (context, err) => {
     const msg = err.message || String(err);
     console.warn(`[ASR Error] ${context}:`, msg);
@@ -221,7 +234,7 @@ export default function App() {
   };
 
   const startRealLiveTranscription = async () => {
-    stopRealLiveTranscription();
+    await stopRealLiveTranscription();
 
     console.log('[ASR] Starting real live transcription loop...');
     if (webrtcService.socket && webrtcService.socket.connected) {
@@ -252,7 +265,8 @@ export default function App() {
               formData.append("file", event.data, "chunk.webm");
               formData.append("model", "whisper-large-v3");
               formData.append("temperature", "0");
-              formData.append("prompt", "This is a telemedicine counseling session for addiction recovery in Punjab. The speakers use a mix of English, Hindi (जैसे नशा, दवाई, इलाज, समस्या, मदद), and Punjabi (ਜਿਵੇਂ ਕਿ ਨਸ਼ਾ, ਦਵਾਈ, ਇਲਾਜ, ਸਿਹਤ, ਮਦਦ, ਮੁਕਤੀ, ਸ਼ਰਾਬ, ਠੀਕ). Transcribe the spoken words exactly as they are pronounced in their respective scripts (English in Latin, Hindi in Devanagari, Punjabi in Gurmukhi).");
+              formData.append("language", selectedLanguage);
+              formData.append("prompt", "नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।");
 
               const response = await fetch(`${SERVER_URL}/api/ai/audio/transcriptions`, {
                 method: "POST",
@@ -271,7 +285,7 @@ export default function App() {
 
               if (response.ok) {
                 const resData = await response.json();
-                const text = resData.text;
+                const text = cleanTranscriptForLanguage(resData.text, selectedLanguage);
                 if (text && !isHallucination(text)) {
                   const newTranscript = { sender: userRole, text: text.trim() };
                   setTranscripts(prev => [...prev, newTranscript]);
@@ -360,6 +374,7 @@ export default function App() {
               type: 'audio/m4a',
               name: 'chunk.m4a',
             });
+            formData.append('language', selectedLanguage);
             // Note: model, language, temperature, prompt are all set server-side
             // for consistent quality control and anti-hallucination
 
@@ -380,7 +395,7 @@ export default function App() {
 
             if (response.ok) {
               const resData = await response.json();
-              const text = resData.text;
+              const text = cleanTranscriptForLanguage(resData.text, selectedLanguage);
               
               if (webrtcService.socket && webrtcService.socket.connected) {
                 webrtcService.socket.emit('log-message', {
@@ -417,6 +432,13 @@ export default function App() {
           
           let currentRecording = null;
           try {
+            if (recordingRef.current) {
+              try {
+                await recordingRef.current.stopAndUnloadAsync();
+              } catch (e) {}
+              recordingRef.current = null;
+            }
+
             currentRecording = new Audio.Recording();
             recordingRef.current = currentRecording;
             
@@ -474,7 +496,7 @@ export default function App() {
     }
   };
 
-  const stopRealLiveTranscription = () => {
+  const stopRealLiveTranscription = async () => {
     console.log('[ASR] Stopping real live transcription loop...');
     transcriptionLoopIdRef.current = 0; // invalidate any active loops
     if (Platform.OS === 'web') {
@@ -494,7 +516,7 @@ export default function App() {
         const temp = recordingRef.current;
         recordingRef.current = null;
         try {
-          temp.stopAndUnloadAsync();
+          await temp.stopAndUnloadAsync();
         } catch (e) {}
       }
     }
@@ -695,8 +717,9 @@ export default function App() {
     setStatusMsg('Authenticating...');
     try {
       const authUrl = userRole === 'patient' ? `${SERVER_URL}/api/auth/patient-login` : `${SERVER_URL}/api/auth/login`;
+      const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
       const authBody = userRole === 'patient' 
-        ? { patientId: idToConnect } 
+        ? { patientId: idToConnect, preferredLanguage: langMap[selectedLanguage] || 'en-US' } 
         : { username: idToConnect, password: 'CBM@Counsellor24' }; // Fallback password for counsellors
 
       const authRes = await fetch(authUrl, {
@@ -743,7 +766,10 @@ export default function App() {
         // Skip transcripts of our own voice relayed back from the counselor dashboard
         // to avoid duplicate entries (counselor dashboard may also transcribe our stream)
         if (data.sender === userRole) return;
-        setTranscripts(prev => [...prev, data]);
+        const text = cleanTranscriptForLanguage(data.text, selectedLanguage);
+        if (text) {
+          setTranscripts(prev => [...prev, { ...data, text }]);
+        }
       },
       onCallQualityUpdate: (status) => {
         setCallQuality(status);
@@ -971,7 +997,7 @@ export default function App() {
           <View style={styles.loginCard}>
             <View style={styles.iconContainer}>
               <Image 
-                source={require('./assets/logo.png')} 
+                source={require('./assets/avatar.png')} 
                 style={{ width: 60, height: 60, borderRadius: 30 }} 
               />
             </View>
@@ -1041,6 +1067,27 @@ export default function App() {
               autoCapitalize="none"
               autoCorrect={false}
             />
+
+            {userRole === 'patient' && (
+              <>
+                <Text style={styles.label}>Preferred Language</Text>
+                <View style={styles.langRow}>
+                  {[
+                    { code: 'en', name: 'English' },
+                    { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                    { code: 'hi', name: 'हिन्दी' }
+                  ].map(lang => (
+                    <TouchableOpacity 
+                      key={lang.code} 
+                      onPress={() => setSelectedLanguage(lang.code)}
+                      style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                    >
+                      <Text style={styles.langBtnText}>{lang.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
 
             <TouchableOpacity style={styles.btnPrimary} onPress={handleLogin}>
               <Text style={styles.btnText}>Login & Open Dashboard</Text>
@@ -1163,12 +1210,51 @@ export default function App() {
             </>
           ) : (
             <>
+              {/* Preferred Language Selector Card */}
+              <View style={styles.dashboardCard}>
+                <Text style={styles.cardHeader}>Preferred Language</Text>
+                <Text style={[styles.label, { marginBottom: 10 }]}>Change transcription and system language</Text>
+                <View style={styles.langRow}>
+                  {[
+                    { code: 'en', name: 'English' },
+                    { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                    { code: 'hi', name: 'हिन्दी' }
+                  ].map(lang => (
+                    <TouchableOpacity 
+                      key={lang.code} 
+                      onPress={async () => {
+                        setSelectedLanguage(lang.code);
+                        // Also persist to server DB
+                        const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
+                        try {
+                          await fetch(`${SERVER_URL}/api/auth/patient-login`, {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'X-Requested-With': 'XMLHttpRequest',
+                              'ngrok-skip-browser-warning': '1'
+                            },
+                            body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
+                          });
+                          console.log('[MobileApp] Updated preferred language on dashboard change:', lang.code);
+                        } catch (err) {
+                          console.warn('[MobileApp] Failed to update language on server:', err.message);
+                        }
+                      }}
+                      style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                    >
+                      <Text style={styles.langBtnText}>{lang.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
               {/* Counselor Info Card */}
               <View style={styles.dashboardCard}>
                 <Text style={styles.cardHeader}>Your Assigned Counselor</Text>
                 <View style={styles.counselorRow}>
                   <View style={styles.avatar}>
-                    <Image source={require('./assets/logo.png')} style={{ width: 44, height: 44, borderRadius: 22 }} />
+                    <Image source={require('./assets/avatar.png')} style={{ width: 44, height: 44, borderRadius: 22 }} />
                   </View>
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <Text style={styles.counselorName}>{callerName}</Text>
@@ -1268,7 +1354,7 @@ export default function App() {
       {uiState === 'incoming' && (
         <View style={styles.fullscreenCall}>
           <View style={styles.avatarLarge}>
-            <Image source={require('./assets/logo.png')} style={{ width: 110, height: 110, borderRadius: 55 }} />
+            <Image source={require('./assets/avatar.png')} style={{ width: 110, height: 110, borderRadius: 55 }} />
           </View>
           <Text style={styles.incomingTitle}>{callerName}</Text>
           <Text style={styles.incomingSubtitle}>Incoming Counselor Call...</Text>
@@ -1320,6 +1406,43 @@ export default function App() {
             <TouchableOpacity onPress={handleReconnect} style={styles.reconnectBtn}>
               <Text style={{ color: '#fff', fontWeight: 'bold' }}>⚠️ Signal Lost - Reconnect</Text>
             </TouchableOpacity>
+          )}
+
+          {/* Active Call Language selection bar */}
+          {userRole === 'patient' && (
+            <View style={[styles.langRow, { marginBottom: 15, width: '100%' }]}>
+              {[
+                { code: 'en', name: 'English' },
+                { code: 'pa', name: 'ਪੰਜਾਬੀ' },
+                { code: 'hi', name: 'हिन्दी' }
+              ].map(lang => (
+                <TouchableOpacity 
+                  key={lang.code} 
+                  onPress={async () => {
+                    setSelectedLanguage(lang.code);
+                    // Also persist to server DB so counselor gets updated
+                    const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
+                    try {
+                      await fetch(`${SERVER_URL}/api/auth/patient-login`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'X-Requested-With': 'XMLHttpRequest',
+                          'ngrok-skip-browser-warning': '1'
+                            },
+                        body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
+                      });
+                      console.log('[MobileApp] Updated preferred language mid-call:', lang.code);
+                    } catch (err) {
+                      console.warn('[MobileApp] Failed to update language on server:', err.message);
+                    }
+                  }}
+                  style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}
+                >
+                  <Text style={styles.langBtnText}>{lang.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           )}
 
           {/* Live Transcript View */}
@@ -2178,76 +2301,82 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   govBanner: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     backgroundColor: '#030712',
     borderWidth: 1,
     borderColor: '#1f2937',
-    padding: 12,
-    borderRadius: 14,
+    padding: 20,
+    borderRadius: 18,
     width: '100%',
     marginBottom: 20,
     gap: 12,
   },
   govImage: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 1.5,
+    width: 130,
+    height: 130,
+    borderRadius: 14,
+    borderWidth: 2,
     borderColor: '#0d9488',
   },
   govTextContainer: {
-    flex: 1,
+    alignItems: 'center',
   },
   govName: {
     color: '#f8fafc',
-    fontSize: 13,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   govTitle: {
     color: '#94a3b8',
-    fontSize: 10,
-    marginTop: 1,
+    fontSize: 11,
+    marginTop: 2,
+    textAlign: 'center',
   },
   govInitiative: {
     color: '#0d9488',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '700',
-    marginTop: 2,
+    marginTop: 4,
+    textAlign: 'center',
   },
   dashboardGovBanner: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
     backgroundColor: '#111827',
     borderWidth: 1,
     borderColor: '#1f2937',
-    padding: 14,
+    padding: 20,
     borderRadius: 20,
     width: '100%',
     marginBottom: 20,
     gap: 14,
   },
   dashboardGovImage: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    borderWidth: 1.5,
+    width: 140,
+    height: 140,
+    borderRadius: 16,
+    borderWidth: 2,
     borderColor: '#0d9488',
   },
   dashboardGovText: {
     color: '#f8fafc',
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '800',
+    textAlign: 'center',
   },
   dashboardGovSubtext: {
     color: '#94a3b8',
-    fontSize: 11,
-    marginTop: 1,
+    fontSize: 12,
+    marginTop: 2,
+    textAlign: 'center',
   },
   dashboardGovInitiative: {
     color: '#0d9488',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
-    marginTop: 2,
+    marginTop: 4,
+    textAlign: 'center',
   }
 });

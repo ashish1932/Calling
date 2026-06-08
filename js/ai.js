@@ -12,11 +12,15 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
+    const token = window.localStorage.getItem('counseling_logged_in_token');
     const headers = { 
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "ngrok-skip-browser-warning": "1"
     };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
 
     if (provider === 'gemini') {
       if (window.CounselFlow.CONFIG.GEMINI_API_KEY) {
@@ -334,10 +338,32 @@ The JSON object must have EXACTLY these fields:
       formData.append("response_format", "json");
       // Ask Whisper to not transcribe if the audio is likely silence
       // (Removed hardcoded prompt and temperature per user request)
+      
+      // ── Smart language hinting ─────────────────────────────────────
+      // Only pass a language hint when we're confident of the dominant language.
+      // Whisper auto-detect works well for English but benefits from hints
+      // for Indic languages. Map BCP-47 codes to ISO-639-1.
+      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': 'en' };
+      const langHint = langMap[languageCode] || null;
+      if (langHint) {
+        formData.append("language", langHint);
+      }
+
+      // Rich trilingual domain prompt — gives Whisper vocabulary hints for
+      // medical/counseling terminology in English, Hindi, and Punjabi
+      const domainPrompt =
+        'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
+      formData.append("prompt", domainPrompt);
+
+      const token = window.localStorage.getItem('counseling_logged_in_token');
+>>>>>>> 6ea9da5cf8bec3b76be23cb16d028274f0775259
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",
         headers: headers,
