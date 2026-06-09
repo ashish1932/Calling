@@ -1,3 +1,8 @@
+// CounselFlow AI Backend Server
+// Polyfill global crypto for Mongoose 9 on Node 18
+if (!globalThis.crypto) {
+  globalThis.crypto = require('crypto');
+}
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const mongoose = require('mongoose');
@@ -159,6 +164,12 @@ app.get('/api/patients', authenticateJWT, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+app.get('/api/patients/online', authenticateJWT, (req, res) => {
+  // return list of patient IDs currently connected via Socket.IO
+  const onlineIds = Object.keys(patientSockets);
+  res.json(onlineIds);
 });
 
 // ==========================================

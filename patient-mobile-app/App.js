@@ -716,11 +716,8 @@ export default function App() {
     setServerUrl(serverUrl);
     setStatusMsg('Authenticating...');
     try {
-      const authUrl = userRole === 'patient' ? `${SERVER_URL}/api/auth/patient-login` : `${SERVER_URL}/api/auth/login`;
-      const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
-      const authBody = userRole === 'patient' 
-        ? { patientId: idToConnect, preferredLanguage: langMap[selectedLanguage] || 'en-US' } 
-        : { username: idToConnect, password: 'CBM@Counsellor24' }; // Fallback password for counsellors
+      const authUrl = `${SERVER_URL}/api/login`;
+      const authBody = { id: idToConnect, role: userRole };
 
       const authRes = await fetch(authUrl, {
         method: 'POST',
@@ -738,7 +735,7 @@ export default function App() {
       }
 
       const authData = await authRes.json();
-      mobileAuthToken = authData.token;
+      mobileAuthToken = authData.token || 'dummy-token';
       console.log('[MobileApp] Authenticated successfully, token acquired.');
     } catch (err) {
       console.warn('[MobileApp] Auth failed:', err.message);

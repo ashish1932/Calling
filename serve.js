@@ -69,11 +69,17 @@ function proxyHttpRequest(req, res) {
 
   const proxy = http.request(options, (proxyRes) => {
     // Forward CORS headers so browser doesn't block
+    const cleanHeaders = { ...proxyRes.headers };
+    delete cleanHeaders['access-control-allow-origin'];
+    delete cleanHeaders['access-control-allow-methods'];
+    delete cleanHeaders['access-control-allow-headers'];
+    delete cleanHeaders['access-control-allow-credentials'];
+
     const headers = {
-      ...proxyRes.headers,
+      ...cleanHeaders,
       'Access-Control-Allow-Origin' : allowOrigin,
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With,ngrok-skip-browser-warning',
       'Access-Control-Allow-Credentials': 'true',
     };
     res.writeHead(proxyRes.statusCode, headers);
@@ -99,7 +105,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin' : allowOrigin,
       'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Requested-With,ngrok-skip-browser-warning',
       'Access-Control-Allow-Credentials': 'true',
     });
     res.end();
@@ -145,7 +151,7 @@ const server = http.createServer((req, res) => {
     }
     
     // Inject secure Content-Security-Policy and OWASP security headers
-    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: https: ws: http:; img-src 'self' data: https: blob:; media-src 'self' data: https: blob:;";
+    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.socket.io https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: https: ws: http:; img-src 'self' data: https: blob:; media-src 'self' data: https: blob:;";
     res.setHeader('Content-Security-Policy', csp);
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-Content-Type-Options', 'nosniff');
