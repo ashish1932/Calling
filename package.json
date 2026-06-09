@@ -22,6 +22,7 @@
     "mongoose": "^9.6.2",
     "multer": "^2.1.1",
     "puppeteer": "^25.1.0",
+    "sarvamai": "^1.1.7",
     "socket.io": "^4.8.3"
   },
   "devDependencies": {

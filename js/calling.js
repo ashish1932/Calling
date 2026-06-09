@@ -71,6 +71,11 @@ class CallManager {
     this.relaySourceQueue = [];      // Queue of scheduled audio sources
     this.relayNextPlayTime = 0;      // Gapless scheduling clock
 
+    // Sarvam Streaming STT state
+    this.sttAudioContexts = {};      // speaker -> AudioContext used for PCM extraction
+    this.sttProcessors = {};         // speaker -> ScriptProcessorNode
+    this.sttStreamsActive = {};       // speaker -> boolean
+
     this.initSocket();
   }
 
@@ -187,11 +192,7 @@ this.socket.on('dashboard-observe-call', async (data) => {
                              
                              const stream = new MediaStream([track.mediaStreamTrack]);
                              const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-                             if (speakerName === "Counselor") {
-                                 this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
-                             } else {
-                                 this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
-                             }
+                             this.setupStreamingSTT(stream, speakerName);
                          }
                      });
                      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
@@ -235,6 +236,51 @@ this.socket.on('dashboard-observe-call', async (data) => {
          if (data && data.text && this.isActive) {
            const speaker = data.sender === 'counselor' ? 'Counselor' : 'Patient';
            this.addTranscriptLine(speaker, data.text);
+         }
+       });
+
+       // ── Sarvam Streaming STT Events ──
+       this.socket.on('stt-transcript', (data) => {
+         if (data && data.text && this.isActive) {
+           // Apply hallucination guard
+           const t = data.text.trim();
+           if (t.length < 2) return;
+           if (/(\S+)(\s+\1){2,}/i.test(t)) return;
+           const HALLUCINATIONS = [
+             'thank you for watching', 'thank you', 'thanks for watching',
+             'please subscribe', 'like and subscribe',
+             'bye bye', 'goodbye', 'see you', 'okay okay okay',
+             '.   .', '. . .', '...',
+           ];
+           const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
+           if (HALLUCINATIONS.some(h => tLower === h)) return;
+
+           this.addTranscriptLine(data.speaker, data.text);
+         }
+       });
+
+       this.socket.on('stt-vad-event', (data) => {
+         if (!this.isActive || !data) return;
+         const indicator = document.getElementById(`vad-indicator-${data.speaker}`);
+         if (indicator) {
+           if (data.signalType === 'START_SPEECH') {
+             indicator.classList.add('speaking');
+             indicator.textContent = `${data.speaker}: Speaking...`;
+           } else {
+             indicator.classList.remove('speaking');
+             indicator.textContent = `${data.speaker}: Silent`;
+           }
+         }
+       });
+
+       this.socket.on('stt-stream-ready', (data) => {
+         console.log(`[Sarvam STT] Stream ready for ${data.speaker}`);
+       });
+
+       this.socket.on('stt-error', (data) => {
+         console.error('[Sarvam STT] Error:', data.message);
+         if (window.CounselFlow && window.CounselFlow.app) {
+           window.CounselFlow.app.showToast('STT Error', data.message || 'Transcription error.', 'error');
          }
        });
     } else {
@@ -281,15 +327,10 @@ this.socket.on('dashboard-observe-call', async (data) => {
             element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
           }
           
-          // Wire up Live Transcription!
+          // Wire up Sarvam Streaming STT!
           const stream = new MediaStream([track.mediaStreamTrack]);
           const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-          
-          if (speakerName === "Counselor") {
-            this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
-          } else {
-            this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
-          }
+          this.setupStreamingSTT(stream, speakerName);
         }
       });
 
@@ -470,6 +511,100 @@ this.socket.on('dashboard-observe-call', async (data) => {
     }, 4000);
     
     return recorder;
+  }
+
+  // ── Sarvam Streaming STT: Extract raw 16kHz PCM from a MediaStream and stream to server
+  setupStreamingSTT(stream, speaker) {
+    if (!stream || !this.socket) return;
+
+    // Map active language to Sarvam language code
+    const langMap = { 'pa-IN': 'pa-IN', 'hi-IN': 'hi-IN', 'en-US': 'en-IN' };
+    const language = langMap[this.activeLanguage] || 'hi-IN';
+
+    // 1. Tell the server to open a Sarvam WebSocket for this speaker
+    this.socket.emit('start-stt-stream', {
+      speaker: speaker,
+      language: language,
+      mode: 'codemix'
+    });
+
+    // 2. Create an AudioContext at 16kHz to downsample browser audio (usually 48kHz)
+    let audioCtx;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    } catch (e) {
+      console.error(`[Sarvam STT] Failed to create AudioContext for ${speaker}:`, e);
+      return;
+    }
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    
+    // ScriptProcessorNode with bufferSize=4096 (~256ms at 16kHz)
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    
+    this.sttStreamsActive[speaker] = true;
+
+    processor.onaudioprocess = (e) => {
+      if (!this.isActive || !this.sttStreamsActive[speaker]) return;
+      if (this.isMuted && speaker === 'Counselor') return;
+      if (this.isHeld) return;
+
+      const float32 = e.inputBuffer.getChannelData(0);
+      
+      // Convert Float32 [-1, 1] to Int16 [-32768, 32767] (pcm_s16le)
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // Convert to base64
+      const uint8 = new Uint8Array(int16.buffer);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Audio = btoa(binary);
+
+      // Send to server
+      this.socket.emit('stt-audio-chunk', {
+        speaker: speaker,
+        audio: base64Audio
+      });
+    };
+
+    source.connect(processor);
+    processor.connect(audioCtx.destination); // Required for ScriptProcessor to fire
+
+    // Store references for cleanup
+    this.sttAudioContexts[speaker] = audioCtx;
+    this.sttProcessors[speaker] = processor;
+
+    console.log(`[Sarvam STT] PCM extraction started for ${speaker} at ${audioCtx.sampleRate}Hz`);
+  }
+
+  // Stop all active Sarvam STT streams
+  stopAllStreamingSTT() {
+    for (const speaker of Object.keys(this.sttStreamsActive)) {
+      this.sttStreamsActive[speaker] = false;
+      
+      // Disconnect AudioContext processor
+      if (this.sttProcessors[speaker]) {
+        try { this.sttProcessors[speaker].disconnect(); } catch (e) {}
+        delete this.sttProcessors[speaker];
+      }
+      if (this.sttAudioContexts[speaker]) {
+        try { this.sttAudioContexts[speaker].close(); } catch (e) {}
+        delete this.sttAudioContexts[speaker];
+      }
+    }
+    this.sttStreamsActive = {};
+
+    // Tell server to close all Sarvam streams for this socket
+    if (this.socket) {
+      this.socket.emit('stop-stt-stream', {});
+    }
+    console.log('[Sarvam STT] All streams stopped.');
   }
 
   // Issue 1: Missing startInteractiveDemo Method
@@ -901,7 +1036,6 @@ this.socket.on('dashboard-observe-call', async (data) => {
       const secs = (this.duration % 60).toString().padStart(2, '0');
       
       document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
-      document.getElementById('patient-cravings').innerText = `${this.activePatient.cravingsIntensity || 0}/10`;
     }, 1000);
 
     // In the new App-to-App LiveKit architecture, the Dashboard acts as an observer.
@@ -959,7 +1093,10 @@ this.socket.on('dashboard-observe-call', async (data) => {
       this.localStream = null;
     }
 
-     // Stop Whisper Transcribers
+     // Stop Sarvam Streaming STT
+     this.stopAllStreamingSTT();
+
+     // Stop legacy Whisper Transcribers (if any still active)
      if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
        try { this.counselorRecorder.stop(); } catch(e){}
      }

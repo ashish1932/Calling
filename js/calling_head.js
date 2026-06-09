@@ -11,6 +11,7 @@ class CallManager {
     this.isHeld = false; // UX #47: Hold state toggle
     this.duration = 0;
     this.timerInterval = null;
+    this.whisperQueue = Promise.resolve(); // Issue 2: Initialize whisperQueue
     this.canvas = null;
     this.ctx = null;
     this.animationFrame = null;
@@ -19,9 +20,6 @@ class CallManager {
     this.activePatient = null;
     this.activeLanguage = 'pa-IN';
     
-    this.scenarioInterval = null;
-    this.scenarioIndex = 0;
-    this.isRelayMode = false;
     
     this.lastSessionTranscript = []; // Cache for post-call summaries (Bug #2)
     this.asrSupportWarned = false; // ASR browser support warning flag (Error Handling #4)
@@ -44,36 +42,75 @@ class CallManager {
     this.patientSocketId = null; // Store actual socket ID for routing ICE & end-call
     this.remoteAudio = new Audio();
     this.remoteAudio.autoplay = true;
-    // Unlock autoplay: browsers need a user gesture ΓÇö attach to document click once
-    const unlockAudio = () => {
-      this.remoteAudio.play().catch(() => {});
-      document.removeEventListener('click', unlockAudio);
+    // Unlock autoplay: browsers need a user gesture
+    this.audioUnlockHandler = () => {
+      if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
+        this.remoteAudio.play().catch(e => {
+          console.warn('[WebRTC] Audio autoplay blocked:', e);
+          // Show persistent unlock instruction
+          this.addWarningToTranscriptLog(
+            "Audio Blocked", 
+            "Browser blocked autoplay. Click anywhere on the screen to enable audio."
+          );
+        });
+      }
     };
-    document.addEventListener('click', unlockAudio);
+    // Add persistent handler that doesn't remove itself
+    document.addEventListener('click', this.audioUnlockHandler);
+    document.addEventListener('touchstart', this.audioUnlockHandler);
+    // Also try to unlock on keydown for keyboard accessibility
+    document.addEventListener('keydown', this.audioUnlockHandler);
+    
+    this.iceCandidateQueue = [];
+    this.patientAnswered = false;
+
+    // Socket Audio Relay fallback (activated when WebRTC P2P fails)
+    this.isRelayMode = false;
+    this.relayRecorder = null;       // MediaRecorder capturing local mic for relay
+    this.relayAudioCtx = null;       // AudioContext for playing received relay chunks
+    this.relaySourceQueue = [];      // Queue of scheduled audio sources
+    this.relayNextPlayTime = 0;      // Gapless scheduling clock
+
+    // Sarvam Streaming STT state
+    this.sttAudioContexts = {};      // speaker -> AudioContext used for PCM extraction
+    this.sttProcessors = {};         // speaker -> ScriptProcessorNode
+    this.sttStreamsActive = {};       // speaker -> boolean
+
     this.initSocket();
   }
 
   // Initialize Socket.io connection for Counselor
   initSocket() {
     if (typeof io !== 'undefined') {
-      // Always connect to the same origin (serve.js proxies /socket.io ΓåÆ port 5001)
+      // Always connect to the same origin (serve.js proxies /socket.io → port 5001)
       // This works locally (localhost:3001) AND via ngrok without any URL changes.
       const socketUrl = window.location.origin;
       this.socket = io(socketUrl, { transports: ['websocket', 'polling'] });
 
       this.socket.on('connect', () => {
         console.log('[WebRTC] Connected to Signaling Server:', this.socket.id);
-        this.socket.emit('register', { role: 'counselor', id: 'counsellor_amritsar@cbm.gov.in' });
+        const counselorId = 'counselor-' + Math.random().toString(36).substr(2, 9);
+        this.socket.emit('register', { role: 'counselor', id: counselorId });
       });
 
       this.socket.on('answer-made', async (data) => {
         // Save patient's SOCKET ID for ICE and end-call routing
         this.patientSocketId = data.socket;
+        this.patientAnswered = true;
         console.log('[WebRTC] Patient answered. Patient socket:', this.patientSocketId);
         if (this.peerConnection) {
           try {
             await this.peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
             console.log('[WebRTC] Remote description (answer) set successfully.');
+            
+            // Flush buffered ICE candidates now that the remote description is set
+            for (let candidate of this.iceCandidateQueue) {
+              this.socket.emit('ice-candidate', {
+                to: this.patientSocketId,
+                candidate: candidate
+              });
+            }
+            this.iceCandidateQueue = [];
           } catch (err) {
             console.error('[WebRTC] Failed to set remote description:', err);
           }
@@ -81,14 +118,21 @@ class CallManager {
       });
 
       this.socket.on('ice-candidate-received', async (data) => {
-        if (this.peerConnection && data.candidate) {
-          try {
-            await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-          } catch (err) {
-            console.warn('[WebRTC] ICE candidate add failed (may be harmless):', err.message);
-          }
+      if (this.peerConnection && data.candidate) {
+        try {
+          await this.peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+          window.CounselFlow.writeAuditEvent(
+            'ICE_CANDIDATE_RECEIVED',
+            this.currentPatientId,
+            null,
+            window.CounselFlow.getActiveRole(),
+            `Received ICE candidate from ${data.source || 'patient'}`
+          );
+        } catch (e) {
+          console.error('[WebRTC] Error adding received ICE candidate', e);
         }
-      });
+      }
+    });
 
       this.socket.on('call-failed', (data) => {
         const reason = data && data.reason === 'patient-offline'
@@ -109,103 +153,228 @@ class CallManager {
         this.patientSocketId = null;
         this.endCall();
       });
+
+this.socket.on('dashboard-observe-call', async (data) => {
+         if (!this.room && data.roomName) {
+             console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
+             try {
+                 const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                 const resp = await fetch('/api/livekit/token', {
+                     method: 'POST',
+                     headers: { 
+                       'Content-Type': 'application/json',
+                       'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                       'X-Requested-With': 'XMLHttpRequest'
+                     },
+                     body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                 });
+                 const tokenData = await resp.json();
+                 if (tokenData.token && window.LivekitClient) {
+                     this.isActive = true;
+                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
+                     window.CounselFlow.app.switchScreen('call-console');
+                     this.duration = 0;
+                     this.timerInterval = setInterval(() => {
+                       this.duration++;
+                       const hrs = Math.floor(this.duration / 3600).toString();
+                       const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                       const secs = (this.duration % 60).toString().padStart(2, '0');
+                       const timerEl = document.getElementById('call-duration-timer');
+                       if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                     }, 1000);
+                     
+                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                         if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                             const element = track.attach();
+                             document.body.appendChild(element);
+                             if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                             
+                             const stream = new MediaStream([track.mediaStreamTrack]);
+                             const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                             this.setupStreamingSTT(stream, speakerName);
+                         }
+                     });
+                     this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                         console.log('[LiveKit] Participant disconnected:', participant.identity);
+                         window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                         this.endCall();
+                     });
+                     
+                     this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                         console.log('[LiveKit] Room disconnected.');
+                         this.endCall();
+                     });
+
+                     // Listen for transcription from mobile clients
+                     this.socket.on('transcription', (transcriptData) => {
+                         if (transcriptData && transcriptData.roomName === data.roomName && transcriptData.text) {
+                             const speaker = transcriptData.speaker === 'counselor' ? 'Counselor' : 'Patient';
+                             this.addTranscriptLine(speaker, transcriptData.text);
+                         }
+                     });
+
+                     await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                     window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                 }
+             } catch (err) {
+                 console.error('[LiveKit] Failed to observe call:', err);
+             }
+         }
+       });
+
+       // Handle inbound call notifications (patient calling counselor)
+       this.socket.on('incoming-call', (data) => {
+         console.log('[WebRTC] Incoming call from patient:', data.patientName || data.patientId);
+         if (!this.isActive) {
+           this.showIncomingCallPopup(data.patientId, data.patientName, data.roomName);
+         }
+       });
+
+       // Handle transcript updates during LiveKit calls
+       this.socket.on('transcript-update', (data) => {
+         if (data && data.text && this.isActive) {
+           const speaker = data.sender === 'counselor' ? 'Counselor' : 'Patient';
+           this.addTranscriptLine(speaker, data.text);
+         }
+       });
+
+       // ── Sarvam Streaming STT Events ──
+       this.socket.on('stt-transcript', (data) => {
+         if (data && data.text && this.isActive) {
+           // Apply hallucination guard
+           const t = data.text.trim();
+           if (t.length < 2) return;
+           if (/(\S+)(\s+\1){2,}/i.test(t)) return;
+           const HALLUCINATIONS = [
+             'thank you for watching', 'thank you', 'thanks for watching',
+             'please subscribe', 'like and subscribe',
+             'bye bye', 'goodbye', 'see you', 'okay okay okay',
+             '.   .', '. . .', '...',
+           ];
+           const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
+           if (HALLUCINATIONS.some(h => tLower === h)) return;
+
+           this.addTranscriptLine(data.speaker, data.text);
+         }
+       });
+
+       this.socket.on('stt-vad-event', (data) => {
+         if (!this.isActive || !data) return;
+         const indicator = document.getElementById(`vad-indicator-${data.speaker}`);
+         if (indicator) {
+           if (data.signalType === 'START_SPEECH') {
+             indicator.classList.add('speaking');
+             indicator.textContent = `${data.speaker}: Speaking...`;
+           } else {
+             indicator.classList.remove('speaking');
+             indicator.textContent = `${data.speaker}: Silent`;
+           }
+         }
+       });
+
+       this.socket.on('stt-stream-ready', (data) => {
+         console.log(`[Sarvam STT] Stream ready for ${data.speaker}`);
+       });
+
+       this.socket.on('stt-error', (data) => {
+         console.error('[Sarvam STT] Error:', data.message);
+         if (window.CounselFlow && window.CounselFlow.app) {
+           window.CounselFlow.app.showToast('STT Error', data.message || 'Transcription error.', 'error');
+         }
+       });
     } else {
       console.warn("Socket.io is not loaded.");
     }
   }
 
-  // Init WebRTC Offer for In-App Calling
-  async initWebRTC(patient) {
-    if (!this.socket) {
-      window.CounselFlow.app.showToast('Not Connected', 'Socket not connected to signaling server. Refresh the page.', 'error');
+  // Init LiveKit for In-App Calling (App-to-App Architecture)
+  async initLiveKit(patient) {
+    if (!window.LivekitClient) {
+      window.CounselFlow.app.showToast('Error', 'LiveKit SDK not loaded', 'error');
       return;
     }
-    
+
     try {
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,           // Mono — optimal for speech recognition
-          echoCancellation: true,    // Remove echo from speakers
-          noiseSuppression: true,    // Suppress ambient background noise
-          autoGainControl: true,     // Normalize volume levels
-          sampleRate: 16000          // 16kHz — Whisper's native sample rate
+      // The web dashboard no longer publishes its mic. It acts as an observer for ASR.
+      const roomName = `counselflow-room-${patient.id}`;
+      const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+      
+      const resp = await fetch('/api/livekit/token', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+          'X-Requested-With': 'XMLHttpRequest'
         },
-        video: false
+        body: JSON.stringify({ roomName, participantName, isCounselor: true }) // Still considered a counselor for JWT role
       });
-      console.log('[WebRTC] Microphone access granted.');
+      
+      const data = await resp.json();
+      if (!data.token) throw new Error(data.error || "Could not get LiveKit token");
+      
+      this.room = new LivekitClient.Room({
+        adaptiveStream: true,
+        dynacast: true,
+      });
 
-      // Fetch ICE servers (STUN + TURN) from backend ΓÇö TURN relays audio across different networks
-      let iceConfig = {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
-        iceCandidatePoolSize: 10,
-      };
-      try {
-        const apiBase = window.CounselFlow.API_BASE || '/api';
-        const resp = await fetch(`${apiBase}/ice-servers`);
-        if (resp.ok) {
-          const data = await resp.json();
-          iceConfig = { iceServers: data.iceServers, iceCandidatePoolSize: data.iceCandidatePoolSize || 10 };
-          console.log('[WebRTC] Loaded ICE config from server:', iceConfig.iceServers.length, 'servers');
+      this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (track.kind === LivekitClient.Track.Kind.Audio || track.kind === 'audio') {
+          console.log('[LiveKit] Remote audio track subscribed from:', participant.name || participant.identity);
+          const element = track.attach();
+          document.body.appendChild(element);
+          if (typeof element.play === 'function') {
+            element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
+          }
+          
+          // Wire up Sarvam Streaming STT!
+          const stream = new MediaStream([track.mediaStreamTrack]);
+          const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+          this.setupStreamingSTT(stream, speakerName);
         }
-      } catch (iceErr) {
-        console.warn('[WebRTC] Could not load ICE config from server, using STUN fallback:', iceErr.message);
-      }
+      });
 
-      this.peerConnection = new RTCPeerConnection(iceConfig);
+      this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        track.detach();
+      });
 
-      this.localStream.getTracks().forEach(track => this.peerConnection.addTrack(track, this.localStream));
+      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+        console.log('[LiveKit] Participant disconnected:', participant.identity);
+        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+        this.endCall();
+      });
 
-      // When remote audio track arrives, attach to audio element
-      this.peerConnection.ontrack = (event) => {
-        console.log('[WebRTC] Remote audio track received.');
-        this.remoteAudio.srcObject = event.streams[0];
-        this.remoteAudio.play().catch(e => console.warn('[WebRTC] Audio autoplay blocked:', e));
-      };
+      this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+        console.log('[LiveKit] Room disconnected.');
+        this.endCall();
+      });
 
-      // ICE candidates: use patientSocketId if known, else use patient.id as fallback
-      this.peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          const targetId = this.patientSocketId || patient.id;
-          this.socket.emit('ice-candidate', {
-            to: targetId,
-            candidate: event.candidate
-          });
-        }
-      };
+      // Connect to LiveKit Room
+      await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', data.token);
+      console.log('[LiveKit] Connected to room as Dashboard Observer');
 
-      // Log connection state changes for debugging
-      this.peerConnection.onconnectionstatechange = () => {
-        console.log('[WebRTC] Connection state:', this.peerConnection.connectionState);
-        if (this.peerConnection.connectionState === 'connected') {
-          window.CounselFlow.app.showToast('Audio Connected', 'WebRTC peer-to-peer audio link established.', 'success');
-        } else if (this.peerConnection.connectionState === 'failed') {
-          window.CounselFlow.app.showToast('Audio Failed', 'WebRTC audio connection failed. Both users may be on different networks requiring a TURN server.', 'error');
-        }
-      };
-
-      this.peerConnection.oniceconnectionstatechange = () => {
-        console.log('[WebRTC] ICE state:', this.peerConnection.iceConnectionState);
-      };
-
-      const offer = await this.peerConnection.createOffer();
-      await this.peerConnection.setLocalDescription(offer);
-
+      // 1. Notify patient mobile app to join room
       this.socket.emit('call-user', {
-        to: patient.id,
-        offer: offer,
-        callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+         to: patient.id,
+         offer: { type: 'livekit', roomName: roomName },
+         callerInfo: { name: "Dr. Amanpreet (Counselor)" }
       });
+      
+      // 2. Notify counselor mobile app to join room (Handoff)
+      const counselorId = patient.counselorId || "CO-101";
+      this.socket.emit('handoff-call', {
+         to: counselorId,
+         roomName: roomName,
+         patientName: patient.name
+      });
+      
       window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via Patient Portal...`, "info");
+      
     } catch (error) {
-      console.error("WebRTC Setup failed:", error);
-      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-        window.CounselFlow.app.showToast("Microphone Blocked", "Please allow microphone access in your browser settings, then try again.", "error");
-      } else {
-        window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up WebRTC audio.", "error");
-      }
+      console.error("LiveKit Setup failed:", error);
+      this.endCall();
+      window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up LiveKit audio.", "error");
+      throw error;
     }
   }
 
@@ -226,7 +395,7 @@ class CallManager {
         return;
       }
       
-      const key = (e.key || '').toLowerCase();
+      const key = e.key.toLowerCase();
       if (e.key === 'Escape') {
         e.preventDefault();
         this.endCall();
@@ -243,142 +412,306 @@ class CallManager {
     });
   }
 
-  // Initialize Live Transcription using Groq Whisper (Replaces flaky Web Speech API)
-  initLiveTranscription() {
-    try {
-      // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers
-      const setupChunkedRecorder = (stream, speaker) => {
-        if (!stream || !window.MediaRecorder) return null;
-        const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 48000 };
-        const recorder = new MediaRecorder(stream, options);
-        
-        recorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-            console.debug(`[ASR Debug] ${speaker} chunk: ${event.data.size} bytes, MIME: ${recorder.mimeType}`);
-            // Serialize Whisper API calls to prevent out-of-order flooding
-            this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
-              const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-              if (transcript && this.isActive) {
-                console.debug(`[ASR Debug] ${speaker} raw transcript: "${transcript}"`);
-
-                //  Hallucination Guard 
-                const isHallucination = (text) => {
-                  const t = text.trim();
-                  // 1. Too short — single words or fragments are almost always noise
-                  if (t.split(/\s+/).length < 2) return true;
-
-                  // 2. Pure punctuation / ellipsis
-                  if (/^[\s.,…!?\-_]+$/.test(t)) return true;
-
-                  // 3. Repetition loop detection (same word ≥3 times in a row)
-                  if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
-
-                  // 4. Comprehensive Whisper hallucination blocklist
-                  const HALLUCINATIONS = [
-                    // English YouTube / podcast artifacts / silence loops
-                    "do not", "don't", "do not track", "pata", "pata nahi", "pata ne",
-                    "hello. i'm a 12-year-old", "hello. i'm a 12-year-old.", "i'm a 12-year-old", "i'm a 12-year-old.",
-                    "hello i'm a 12 year old", "i'm a 12 year old",
-                    "what's going on", "everything is fine", "i'm feeling a bit anxious",
-                    "thank you for watching", "thank you", "thanks for watching",
-                    "please subscribe", "like and subscribe", "comment below",
-                    "please like", "don't forget to subscribe",
-                    "bye bye", "goodbye", "see you", "okay okay okay",
-                    "you", "so", "the", "and", "is", "it",
-                    // Punjabi short-word hallucinations (Gurmukhi)
-                    "ਹਾ", "ਜੀਹ", "ਠੀਕ", "ਓਹ", "ਅਰੇ",
-                    "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
-                    // Hindi short-word hallucinations (Devanagari)
-                    "अरे", "ओह",
-                    "झाल", "अलवूँ", "जरूर जो",
-                    // Romanized Hindi/Punjabi hallucinations
-                    "namaste", "namaste ji", "kya haal", "haan ji", "ji haan",
-                    "theek hai", "achha", "hmm", "haan",
-                    // Punctuation artifacts
-                    ".   .", ". . .", "...", "!!", "??",
-                  ];
-                  const tLower = t.toLowerCase();
-                  if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
-
-                  // 5. Detect if entire text is just filler sounds
-                  if (/^(um|uh|hmm|hm|ah|oh|eh|huh|mm|mhm|erm|uhm|uhh|hmm+|haan|ha+n?)[\s.,!?]*$/i.test(tLower)) return true;
-
-                  return false;
-                };
-
-                if (isHallucination(transcript)) {
-                  console.debug('[ASR] Filtered hallucination:', transcript);
-                  return;
-                }
-                // 
-
-                this.addTranscriptLine(speaker, transcript);
-
-                // Interactive AI Patient Demo: Auto-reply using LLaMA (only for meaningful speech)
-                if (this.isInteractiveDemo && speaker === "Counselor" && transcript.split(/\s+/).length >= 5) {
-                  const reply = await window.CounselFlow.aiOrchestrator.generatePatientResponseAsync(
-                    this.getTranscript(),
-                    this.activePatient,
-                    this.activeLanguage
-                  );
-                  if (reply && this.isActive) {
-                    this.addTranscriptLine("Patient", reply);
-                  }
-                }
-              }
-            }).catch(e => console.error("Whisper transcription error:", e));
-          }
-        };
-
-        recorder.start();
-        
-        // Interval to stop and restart so headers are rewritten for the Whisper API
-        const intervalId = setInterval(() => {
-          if (this.isActive && recorder.state === 'recording') {
-            recorder.stop();
-            recorder.start();
-          } else if (!this.isActive) {
-            clearInterval(intervalId);
-            if (recorder.state === 'recording') recorder.stop();
-          }
-        }, 6000);
-        
-        return recorder;
-      };
-
-      // 1. Setup Counselor Mic Recorder
-      if (this.localStream) {
-        this.counselorRecorder = setupChunkedRecorder(this.localStream, "Counselor");
-        console.log('[ASR] Counselor live transcription started.');
-      } else {
-        console.warn('[ASR] Local stream or MediaRecorder not available for counselor.');
+  // Helper function to create a chunked recorder that stops/starts to rewrite WebM headers for Groq Whisper
+  setupChunkedRecorder(stream, speaker) {
+    if (!stream || !window.MediaRecorder) return null;
+    let options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 16000 };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      options = { mimeType: 'audio/webm', audioBitsPerSecond: 16000 };
+      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+         options = {}; // fallback for Safari
       }
+    }
+    
+    const recorder = new MediaRecorder(stream, options);
+    recorder.ondataavailable = async (event) => {
+      try {
+        if (event.data.size > 1500 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+          this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+            const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+            if (transcript && this.isActive) {
 
-      // 2. Setup Patient Remote Stream Recorder (if peer connection has streams)
-      if (this.peerConnection && !this.isInteractiveDemo) {
-        const attachRemoteRecorder = (stream) => {
-          if (!stream || this.patientRecorder) return;
-          this.patientRecorder = setupChunkedRecorder(stream, "Patient");
-          console.log('[ASR] Patient live transcription started.');
-        };
+            //  Hallucination Guard 
+            const isHallucination = (text) => {
+              const t = text.trim();
 
-        // If tracks are already available
-        const receivers = this.peerConnection.getReceivers();
-        if (receivers.length > 0 && receivers[0].track) {
-          const remoteStream = new MediaStream([receivers[0].track]);
-          attachRemoteRecorder(remoteStream);
-        } else {
-          // Otherwise listen for the track event
-          this.peerConnection.addEventListener('track', (e) => {
-            attachRemoteRecorder(e.streams[0]);
+              // 2. Repetition loop detection (same word ≥3 times in a row)
+              if (/(\S+)(\s+\1){2,}/i.test(t)) return true;
+
+              // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
+              const HALLUCINATIONS = [
+                "what's going on", "everything is fine", "i'm feeling a bit anxious",
+                "i am feeling very anxious and restless my heart is racing and i am having trouble breathing",
+                "i am feeling very anxious and restless",
+                "i have been experiencing chest pain and shortness of breath for the past few days",
+                "my heart rate is very fast and i am having trouble sleeping",
+                "i am also experiencing palpitations and dizziness",
+                "i am worried that i might be having a heart attack",
+                "i am feeling very scared and anxious",
+                "i am feeling very weak",
+                "doctor",
+                "i am experiencing severe chest pain and difficulty breathing",
+                "i am feeling like i am going to pass out",
+                "i am feeling like i am going to collapse",
+                "i am scared",
+                "i am experiencing chest pain shortness of breath and a feeling of impending doom",
+                "i am feeling like i am going to die",
+                "i am feeling a tightness in my chest and throat",
+                "i am feeling numb my body is shaking and i am having trouble speaking",
+                "i am feeling like i am losing control",
+                "i am experiencing a sense of detachment from my body",
+                "i am feeling like i am floating above myself",
+                "i am feeling a sense of panic and anxiety",
+                "i am feeling like i am going to pass out",
+                "i am feeling a lump in my throat",
+                "i am feeling a sense of dread my heart is racing and i am having trouble breathing",
+                "thank you for watching", "thank you", "thanks for watching",
+                "please subscribe", "like and subscribe",
+                "कर दो", "झाल", "अलवूँ", "जरूर जो",
+                "ਸੁਣੋ", "ਹਾਂ ਜੀ", "ਜੀ ਹਾਂ",
+                "bye bye", "goodbye", "see you", "okay okay okay",
+                "hello", "all right", "yeah", "okay", "yes", "no",
+                ".   .", ". . .", "...",
+              ];
+              const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
+              if (HALLUCINATIONS.some(h => tLower === h || tLower.startsWith(h + " ") || tLower.endsWith(" " + h))) return true;
+
+              return false;
+            };
+
+            if (isHallucination(transcript)) {
+              console.debug('[ASR] Filtered hallucination:', transcript);
+              return;
+            }
+            this.addTranscriptLine(speaker, transcript);
+            }
           });
         }
+      } catch (err) {
+        console.error(`[MediaRecorder] Error processing chunk for ${speaker}:`, err);
       }
+    };
+    
+    // Explicit error handler for recorder
+    recorder.onerror = (e) => {
+      console.error(`[MediaRecorder] Error for ${speaker}:`, e.error);
+    };
 
+    recorder.start();
+    
+    // Interval to stop and restart so headers are rewritten for the Whisper API
+    const intervalId = setInterval(() => {
+      if (this.isActive && recorder.state === 'recording') {
+        recorder.stop();
+        recorder.start();
+      } else if (!this.isActive) {
+        clearInterval(intervalId);
+        if (recorder.state === 'recording') recorder.stop();
+      }
+    }, 4000);
+    
+    return recorder;
+  }
+
+  // ── Sarvam Streaming STT: Extract raw 16kHz PCM from a MediaStream and stream to server
+  setupStreamingSTT(stream, speaker) {
+    if (!stream || !this.socket) return;
+
+    // Map active language to Sarvam language code
+    const langMap = { 'pa-IN': 'pa-IN', 'hi-IN': 'hi-IN', 'en-US': 'en-IN' };
+    const language = langMap[this.activeLanguage] || 'hi-IN';
+
+    // 1. Tell the server to open a Sarvam WebSocket for this speaker
+    this.socket.emit('start-stt-stream', {
+      speaker: speaker,
+      language: language,
+      mode: 'codemix'
+    });
+
+    // 2. Create an AudioContext at 16kHz to downsample browser audio (usually 48kHz)
+    let audioCtx;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     } catch (e) {
-      console.error("[ASR] Live transcription setup failed:", e);
-      window.CounselFlow.app.showToast("Transcription Error", "Could not start live transcription engine.", "error");
+      console.error(`[Sarvam STT] Failed to create AudioContext for ${speaker}:`, e);
+      return;
     }
+
+    const source = audioCtx.createMediaStreamSource(stream);
+    
+    // ScriptProcessorNode with bufferSize=4096 (~256ms at 16kHz)
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    
+    this.sttStreamsActive[speaker] = true;
+
+    processor.onaudioprocess = (e) => {
+      if (!this.isActive || !this.sttStreamsActive[speaker]) return;
+      if (this.isMuted && speaker === 'Counselor') return;
+      if (this.isHeld) return;
+
+      const float32 = e.inputBuffer.getChannelData(0);
+      
+      // Convert Float32 [-1, 1] to Int16 [-32768, 32767] (pcm_s16le)
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      
+      // Convert to base64
+      const uint8 = new Uint8Array(int16.buffer);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Audio = btoa(binary);
+
+      // Send to server
+      this.socket.emit('stt-audio-chunk', {
+        speaker: speaker,
+        audio: base64Audio
+      });
+    };
+
+    source.connect(processor);
+    processor.connect(audioCtx.destination); // Required for ScriptProcessor to fire
+
+    // Store references for cleanup
+    this.sttAudioContexts[speaker] = audioCtx;
+    this.sttProcessors[speaker] = processor;
+
+    console.log(`[Sarvam STT] PCM extraction started for ${speaker} at ${audioCtx.sampleRate}Hz`);
+  }
+
+  // Stop all active Sarvam STT streams
+  stopAllStreamingSTT() {
+    for (const speaker of Object.keys(this.sttStreamsActive)) {
+      this.sttStreamsActive[speaker] = false;
+      
+      // Disconnect AudioContext processor
+      if (this.sttProcessors[speaker]) {
+        try { this.sttProcessors[speaker].disconnect(); } catch (e) {}
+        delete this.sttProcessors[speaker];
+      }
+      if (this.sttAudioContexts[speaker]) {
+        try { this.sttAudioContexts[speaker].close(); } catch (e) {}
+        delete this.sttAudioContexts[speaker];
+      }
+    }
+    this.sttStreamsActive = {};
+
+    // Tell server to close all Sarvam streams for this socket
+    if (this.socket) {
+      this.socket.emit('stop-stt-stream', {});
+    }
+    console.log('[Sarvam STT] All streams stopped.');
+  }
+
+  // Issue 1: Missing startInteractiveDemo Method
+  startInteractiveDemo() {
+    console.log("[CallManager] Starting interactive demo...");
+    const demoPatient = {
+      id: "DEMO-001",
+      name: "Interactive Demo Patient",
+      severity: "Medium",
+      status: "Active",
+      phone: "+91-0000000000",
+      addictionCategory: "Opioid (Heroin)"
+    };
+    window.CounselFlow.app.switchScreen('call-console');
+    this.startCall(demoPatient);
+  }
+
+  // Live Transcription is now triggered directly by LiveKit track subscriptions
+  initLiveTranscription() {
+     // No-op for now. ASR is initialized dynamically when LiveKit tracks arrive in TrackSubscribed event.
+     console.log('[ASR] Transcription engine armed and waiting for LiveKit audio tracks...');
+  }
+
+  // ── Socket Audio Relay — activated automatically when WebRTC P2P fails
+  // Streams mic audio as 250ms WebM chunks through Socket.IO → server → patient
+  // Incoming chunks from patient are decoded & played via AudioContext (gapless queue)
+  startSocketAudioRelay() {
+    if (this.isRelayMode || !this.patientSocketId || !this.localStream) return;
+    this.isRelayMode = true;
+    console.log('[Relay] Starting Socket audio relay to patient:', this.patientSocketId);
+
+    // Tell the server to create a relay pair with the patient socket
+    this.socket.emit('audio-relay-start', { to: this.patientSocketId });
+
+    // 1. Capture and stream local mic → server → patient
+    try {
+      const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 };
+      this.relayRecorder = new MediaRecorder(this.localStream, options);
+      this.relayRecorder.ondataavailable = async (event) => {
+        if (event.data && event.data.size > 100 && this.isRelayMode && this.isActive && !this.isMuted) {
+          const buf = await event.data.arrayBuffer();
+          this.socket.emit('audio-chunk', buf);
+        }
+      };
+      this.relayRecorder.start(1000); // 1000ms chunks
+      console.log('[Relay] Mic relay recorder started (1000ms chunks)');
+    } catch (e) {
+      console.error('[Relay] Could not start relay recorder:', e);
+    }
+
+    // 2. Receive and play incoming audio chunks from patient
+    this.relayAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    this.relayNextPlayTime = this.relayAudioCtx.currentTime;
+
+    // Add unlock handler for relay audio
+    const unlockRelayAudio = () => {
+      // Resume audio context if it's suspended
+      if (this.relayAudioCtx && this.relayAudioCtx.state === 'suspended') {
+        this.relayAudioCtx.resume().then(() => {
+          console.log('[Relay] Audio context resumed');
+        }).catch(e => {
+          console.warn('[Relay] Failed to resume audio context:', e);
+        });
+      }
+    };
+    document.addEventListener('click', unlockRelayAudio);
+    document.addEventListener('touchstart', unlockRelayAudio);
+
+    this.socket.on('audio-chunk', async (data) => {
+      if (!this.isRelayMode || !this.relayAudioCtx) return;
+      try {
+        // data arrives as ArrayBuffer from the server
+        const arrayBuf = data instanceof ArrayBuffer ? data : await new Response(data).arrayBuffer();
+        const audioBuf = await this.relayAudioCtx.decodeAudioData(arrayBuf);
+        const source = this.relayAudioCtx.createBufferSource();
+        source.buffer = audioBuf;
+        source.connect(this.relayAudioCtx.destination);
+        // Gapless playback scheduling
+        const now = this.relayAudioCtx.currentTime;
+        const startAt = Math.max(now, this.relayNextPlayTime);
+        source.start(startAt);
+        this.relayNextPlayTime = startAt + audioBuf.duration;
+      } catch (e) {
+        // Ignore decode errors for partial/tiny chunks
+      }
+    });
+
+    console.log('[Relay] Socket audio relay fully active — audio routing through server.');
+  }
+
+  stopSocketAudioRelay() {
+    if (!this.isRelayMode) return;
+    this.isRelayMode = false;
+    if (this.relayRecorder && this.relayRecorder.state !== 'inactive') {
+      try { this.relayRecorder.stop(); } catch(e) {}
+    }
+    this.relayRecorder = null;
+    if (this.relayAudioCtx) {
+      this.relayAudioCtx.close().catch(() => {});
+      this.relayAudioCtx = null;
+    }
+    if (this.socket) {
+      this.socket.emit('audio-relay-stop');
+      this.socket.off('audio-chunk');
+    }
+    // Note: We don't remove the unlock handlers here as they're removed in endCall cleanup
+    console.log('[Relay] Socket audio relay stopped.');
   }
 
   // Visual warning banner inside call transcript feed (Error Handling #4)
@@ -394,15 +727,95 @@ class CallManager {
 
         const warningDiv = document.createElement('div');
         warningDiv.className = 'transcript-warning';
-        warningDiv.style.cssText = "padding: 12px; margin: 10px 0; background: rgba(239, 68, 68, 0.08); border-left: 4px solid var(--accent-red); border-radius: 6px; font-size: 12px; color: var(--text-primary);";
-        warningDiv.innerHTML = `
-          <strong style="color: var(--accent-red); display: block; margin-bottom: 2px; display:flex; align-items:center; gap:6px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> ${escapeHtml(title)}</strong>
-          <span style="color: var(--text-secondary);">${escapeHtml(message)}</span>
-        `;
+        warningDiv.style.cssText = "padding: 12px; margin: 10px 0; background: rgba(239, 68, 68, 0.08); border-left: 4px solid var(--accent-red); border-radius: 4px; font-size: 12px; color: var(--text-primary);";
+        // Use textContent for safe rendering — no raw HTML interpolation
+        const strong = document.createElement('strong');
+        strong.style.cssText = 'color: var(--accent-red); display: flex; align-items: center; gap: 6px; margin-bottom: 4px;';
+        strong.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+        strong.appendChild(document.createTextNode(title));
+        const span = document.createElement('span');
+        span.style.color = 'var(--text-secondary)';
+        span.textContent = message;
+        warningDiv.appendChild(strong);
+        warningDiv.appendChild(span);
         container.appendChild(warningDiv);
         container.scrollTop = container.scrollHeight;
       } catch (e) {
         console.error("DOM rendering error in addWarningToTranscriptLog:", e);
+      }
+    });
+  }
+
+  // Show a visible, working "Enable Audio" banner when browser blocks remote audio autoplay
+  // This fixes the broken recovery mechanism — the button directly calls if (this.remoteAudio && typeof this.remoteAudio.play === 'function') { this.remoteAudio.play().catch(e => console.warn('Autoplay prevented:', e)); }
+  // instead of referencing a non-existent DOM element (#remote-audio is absent in index.html)
+  showAutoplayUnlockBanner() {
+    requestAnimationFrame(() => {
+      try {
+        const container = document.getElementById('call-transcript-log');
+        if (!container) return;
+
+        // Avoid showing duplicate banners
+        if (document.getElementById('autoplay-unlock-banner')) return;
+
+        const placeholder = document.getElementById('transcript-placeholder-text');
+        if (placeholder) placeholder.remove();
+
+        const bannerDiv = document.createElement('div');
+        bannerDiv.id = 'autoplay-unlock-banner';
+        bannerDiv.style.cssText = [
+          'padding: 14px 16px',
+          'margin: 10px 0',
+          'background: rgba(239, 68, 68, 0.08)',
+          'border-left: 4px solid var(--accent-red)',
+          'border-radius: 4px',
+          'font-size: 12px',
+          'color: var(--text-primary)',
+          'display: flex',
+          'align-items: center',
+          'gap: 12px',
+          'flex-wrap: wrap',
+        ].join(';');
+
+        const label = document.createElement('span');
+        label.style.flex = '1';
+        label.innerHTML = `<strong style="color:var(--accent-red);">⚠ Audio Blocked</strong> — Your browser blocked remote audio autoplay. Click the button to hear the patient.`;
+
+        const btn = document.createElement('button');
+        btn.textContent = '🔊 Enable Audio';
+        btn.className = 'btn-primary';
+        btn.style.cssText = 'padding: 5px 12px; font-size: 11px; white-space: nowrap; flex-shrink: 0;';
+        btn.addEventListener('click', () => {
+          // Re-attach srcObject in case it was set before the banner appeared
+          // Then call play() directly on the in-memory Audio object (no DOM lookup)
+          if (this.peerConnection) {
+            const receivers = this.peerConnection.getReceivers();
+            const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
+            if (audioReceiver) {
+              this.remoteAudio.srcObject = new MediaStream([audioReceiver.track]);
+            }
+          }
+          if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
+            this.remoteAudio.play()
+              .then(() => {
+                this._audioUnlocked = true;
+                bannerDiv.remove();
+                window.CounselFlow.app.showToast('Audio Enabled', 'Remote audio is now playing.', 'success');
+              })
+              .catch(err => {
+                console.error('[WebRTC] Manual audio unlock failed:', err);
+                btn.textContent = '⚠ Retry — Click Again';
+                window.CounselFlow.app.showToast('Audio Error', 'Click the Enable Audio button again.', 'error');
+              });
+          }
+        });
+
+        bannerDiv.appendChild(label);
+        bannerDiv.appendChild(btn);
+        container.insertBefore(bannerDiv, container.firstChild);
+        container.scrollTop = 0;
+      } catch (e) {
+        console.error('[WebRTC] showAutoplayUnlockBanner error:', e);
       }
     });
   }
@@ -537,15 +950,9 @@ class CallManager {
     }
   }
 
-  // Begin Interactive AI Patient Simulator Session
-  async startInteractiveDemo(patient, languageCode) {
-    this.isInteractiveDemo = true;
-    await this.startCall(patient, languageCode, "Outbound", false);
-  }
 
   // Begin Tele-Counseling session call
-  async startCall(patient, languageCode, direction = "Outbound", isDemoMode = false) {
-    this.isInteractiveDemo = this.isInteractiveDemo || false; // default if not set
+  async startCall(patient, languageCode, direction = "Outbound") {
     if (this.isActive) return;
     
     this.isActive = true;
@@ -558,14 +965,14 @@ class CallManager {
     this.#currentTranscript = []; // Clean private transcripts array (Bug #2)
     this.lastSessionTranscript = []; // Reset cache (Bug #2)
     this.asrRetryCount = 0; // Reset ASR network retry count (Error Handling #4)
-    this.scenarioIndex = 0;
-    if (!isDemoMode) this.activeScenarioKey = null;
+    this.iceCandidateQueue = [];
+    this.patientAnswered = false;
 
-    // Initiate WebRTC Call
-    if (!isDemoMode) {
-      await this.initWebRTC(patient);
-    } else {
-      this.patientAnswered = true;
+    // Initiate LiveKit Call (Replaces WebRTC)
+    try {
+      await this.initLiveKit(patient);
+    } catch (e) {
+      return; // initLiveKit already called endCall() and showed a toast
     }
     
     // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
@@ -612,7 +1019,7 @@ class CallManager {
     const langBar = document.getElementById('active-language-bar');
     const langLabel = document.getElementById('active-language-label');
     if (langBar && langLabel) {
-      const langNames = { 'pa-IN': 'Punjabi (α¿¬α⌐░α¿£α¿╛α¿¼α⌐Ç)', 'hi-IN': 'Hindi (αñ╣αñ┐αñéαñªαÑÇ)', 'en-US': 'English' };
+      const langNames = { 'pa-IN': 'Punjabi (ਪੰਜਾਬੀ)', 'hi-IN': 'Hindi (हिंदी)', 'en-US': 'English' };
       langLabel.innerText = langNames[languageCode] || languageCode;
       langBar.style.display = 'flex';
     }
@@ -631,44 +1038,45 @@ class CallManager {
       document.getElementById('call-duration-timer').innerText = `${hrs}:${mins}:${secs}`;
     }, 1000);
 
-    // Initialize Live Transcription when call connects (using Groq Whisper chunking)
-    if (isDemoMode) {
-      console.log('[ASR] Demo mode active. Suppressing live transcription setup.');
-    } else if (!this.isRecording) {
+    // In the new App-to-App LiveKit architecture, the Dashboard acts as an observer.
+    // Transcription is wired up dynamically when remote tracks are subscribed (in initLiveKit).
+    if (!this.isRecording) {
       this.addWarningToTranscriptLog(
         "Recording Consent Denied", 
         "This call is not being recorded or transcribed because the patient has not provided consent. Only manual clinical notes will be saved."
       );
-    } else if (this.localStream) {
-      this.initLiveTranscription();
     } else {
       this.addWarningToTranscriptLog(
-        "Microphone Error",
-        "Could not access microphone stream. Transcription cannot start."
+        "AI Observer Active",
+        "The Dashboard is observing the call. Transcription will start automatically when the patient and counselor speak."
       );
     }
-
+    
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
   }
 
   // End Tele-Counseling session call and trigger AI processing
   endCall() {
-    this.isInteractiveDemo = false;
     if (!this.isActive) return;
     
     // Log call attempt (Connected) (Phase 2, Solution Scope #2)
     this.logCallAttempt(this.activePatient, this.duration, this.callDirection || "Outbound", "Connected");
 
-    // Copy active transcript to cache and clear (Bug #2)
-    this.lastSessionTranscript = [...this.#currentTranscript];
+    // Finalize transcripts and push to AI for summarization
+    try {
+      this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript || []));
+    } catch (e) {
+      console.warn("Failed to deep copy transcript, resetting to empty array", e);
+      this.lastSessionTranscript = [];
+    }
+    
     this.#currentTranscript = [];
     
     this.isActive = false;
-    clearTimeout(this.scenarioInterval);
     clearInterval(this.timerInterval);
     this.clearCanvas();
     
-    // End WebRTC Connection ΓÇö use patientSocketId (not patient.id) for socket routing
+    // End WebRTC Connection — use patientSocketId (not patient.id) for socket routing
     if (this.socket) {
       const targetId = this.patientSocketId || (this.activePatient ? this.activePatient.id : null);
       if (targetId) {
@@ -676,22 +1084,35 @@ class CallManager {
       }
     }
     this.patientSocketId = null;
-    if (this.peerConnection) {
-      this.peerConnection.close();
-      this.peerConnection = null;
+    if (this.room) {
+      this.room.disconnect();
+      this.room = null;
     }
     if (this.localStream) {
       this.localStream.getTracks().forEach(t => t.stop());
       this.localStream = null;
     }
 
-    // Stop Whisper Transcribers
-    if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
-      try { this.counselorRecorder.stop(); } catch(e){}
-    }
-    if (this.patientRecorder && this.patientRecorder.state !== "inactive") {
-      try { this.patientRecorder.stop(); } catch(e){}
-    }
+     // Stop Sarvam Streaming STT
+     this.stopAllStreamingSTT();
+
+     // Stop legacy Whisper Transcribers (if any still active)
+     if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
+       try { this.counselorRecorder.stop(); } catch(e){}
+     }
+     if (this.patientRecorder && this.patientRecorder.state !== "inactive") {
+       try { this.patientRecorder.stop(); } catch(e){}
+     }
+
+     // Remove audio unlock handlers
+     if (this.audioUnlockHandler) {
+       document.removeEventListener('click', this.audioUnlockHandler);
+       document.removeEventListener('touchstart', this.audioUnlockHandler);
+       document.removeEventListener('keydown', this.audioUnlockHandler);
+     }
+
+     // Stop socket audio relay if active
+    this.stopSocketAudioRelay();
 
     // Reset hold button UI status
     const holdBtn = document.getElementById('btn-call-hold');
@@ -709,7 +1130,7 @@ class CallManager {
     
     window.CounselFlow.app.showToast("Call Disconnected", "Review the transcript below, then generate your AI summary.", "info");
 
-    // Keep the live transcript visible for review ΓÇö do NOT swap to summary panel yet
+    // Keep the live transcript visible for review — do NOT swap to summary panel yet
     document.getElementById('call-transcript-log').style.display = 'block';
     document.getElementById('call-post-summary-section').style.display = 'none';
 
@@ -747,6 +1168,23 @@ class CallManager {
       logs.unshift(newLog);
       window.CounselFlow.saveCallLogs(logs);
       
+      // Update the patient's cbmContacts for Stage 4 tracking
+      if (!patient.cbmContacts) patient.cbmContacts = [];
+      patient.cbmContacts.push({
+        date: newLog.timestamp,
+        type: newLog.direction,
+        counselorId: newLog.counselorId,
+        outcome: disposition === 'Connected' ? 'connected' : (disposition === 'Missed' ? 'missed' : 'rejected')
+      });
+      // Try to save patient changes (assumes we have access to app.patients)
+      if (window.CounselFlow.app && window.CounselFlow.app.patients) {
+         const ptRef = window.CounselFlow.app.patients.find(p => p.id === patient.id);
+         if (ptRef) {
+           ptRef.cbmContacts = patient.cbmContacts;
+           await window.CounselFlow.savePatients(window.CounselFlow.app.patients);
+         }
+      }
+
       // If the app controller is running, refresh the supervisor tables
       if (window.CounselFlow.app && typeof window.CounselFlow.app.renderSessionHistoryLogs === 'function') {
         window.CounselFlow.app.renderSessionHistoryLogs();
@@ -819,6 +1257,15 @@ class CallManager {
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.#currentTranscript.push({ speaker, text, timestamp: time });
+    // Relay to patient portal for live transcript feature
+    if (this.socket && this.patientSocketId) {
+      this.socket.emit('transcript-update', {
+        to: this.patientSocketId,
+        text: text,
+        sender: speaker.toLowerCase() === 'counselor' ? 'counselor' : 'patient'
+      });
+    }
+
     
     // Performance #62: requestAnimationFrame scheduling
     requestAnimationFrame(() => {
@@ -858,7 +1305,7 @@ class CallManager {
   async playScenarioScript(langKey, targetPatient = null) {
     // Bug #3: Clear old scenario intervals before triggering a new one
     if (this.scenarioInterval) {
-      clearTimeout(this.scenarioInterval);
+      clearInterval(this.scenarioInterval);
     }
     
     const scenario = CALL_SCENARIOS[langKey];
@@ -898,18 +1345,11 @@ class CallManager {
 
   async compileAISummary() {
     let summaryObj;
-    
-    const matchesScenario = this.activeScenarioKey ? CALL_SCENARIOS[this.activeScenarioKey] : Object.values(CALL_SCENARIOS).find(sc => sc.patientId === this.activePatient.id && sc.langCode === this.activeLanguage);
-    
-    if (matchesScenario && matchesScenario.transcript && this.getTranscript().length >= matchesScenario.transcript.length - 2) {
-      summaryObj = matchesScenario.summary;
-    } else {
-      try {
-        summaryObj = await window.CounselFlow.aiOrchestrator.generateSummaryAsync(this.getTranscript(), this.activeLanguage);
-      } catch (e) {
-        console.error("Failed to generate summary asynchronously, falling back to local NLP:", e);
-        summaryObj = window.CounselFlow.aiOrchestrator.generateSummary(this.getTranscript(), this.activeLanguage);
-      }
+    try {
+      summaryObj = await window.CounselFlow.aiOrchestrator.generateSummaryAsync(this.getTranscript(), this.activeLanguage);
+    } catch (e) {
+      console.error("Failed to generate summary asynchronously, falling back to local NLP:", e);
+      summaryObj = window.CounselFlow.aiOrchestrator.generateSummary(this.getTranscript(), this.activeLanguage);
     }
     
     // Draw fields safely escaping outputs
@@ -929,10 +1369,10 @@ class CallManager {
     const escLevel = summaryObj.escalationLevel || 0;
     const escReason = summaryObj.escalationReason || null;
     const escConfigs = {
-      0: { label: 'L0 ΓÇö No Escalation', color: 'var(--accent-teal)', deadline: null },
-      1: { label: '∩╕Å L1 Escalation ΓÇö Supervisor (4h)', color: 'var(--accent-orange)', deadline: '4 hours' },
-      2: { label: ' L2 Escalation ΓÇö DDRC Clinical (24h)', color: 'var(--accent-red)', deadline: '24 hours' },
-      3: { label: ' L3 Escalation ΓÇö State Programme (48h)', color: '#dc2626', deadline: '48 hours' }
+      0: { label: 'L0 — No Escalation', color: 'var(--accent-teal)', deadline: null },
+      1: { label: '️ L1 Escalation — Supervisor (4h)', color: 'var(--accent-orange)', deadline: '4 hours' },
+      2: { label: ' L2 Escalation — DDRC Clinical (24h)', color: 'var(--accent-red)', deadline: '24 hours' },
+      3: { label: ' L3 Escalation — State Programme (48h)', color: '#dc2626', deadline: '48 hours' }
     };
     const escCfg = escConfigs[escLevel] || escConfigs[0];
 
@@ -943,7 +1383,7 @@ class CallManager {
       if (summaryHeader) {
         escBadge = document.createElement('div');
         escBadge.id = 'summary-escalation-badge';
-        escBadge.style.cssText = 'margin-top:10px; padding:8px 14px; border-radius:8px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:8px;';
+        escBadge.style.cssText = 'margin-top:10px; padding:8px 14px; border-radius: 4px; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:8px;';
         summaryHeader.insertAdjacentElement('afterend', escBadge);
       }
     }
@@ -951,7 +1391,7 @@ class CallManager {
       escBadge.style.background = escLevel > 0 ? `${escCfg.color}22` : 'var(--bg-input)';
       escBadge.style.border = `1px solid ${escLevel > 0 ? escCfg.color : 'var(--border-light)'}`;
       escBadge.style.color = escLevel > 0 ? escCfg.color : 'var(--text-muted)';
-      escBadge.innerHTML = `<span>${escCfg.label}</span>${escReason ? `<span style="font-weight:400; font-size:11px;">ΓÇö ${escapeHtml(escReason)}</span>` : ''}`;
+      escBadge.innerHTML = `<span>${escCfg.label}</span>${escReason ? `<span style="font-weight:400; font-size:11px;">— ${escapeHtml(escReason)}</span>` : ''}`;
     }
 
     // Auto-push notification if escalation needed (Req 9)
@@ -960,7 +1400,7 @@ class CallManager {
       const deadline = escCfg.deadline;
       window.CounselFlow.app.notifications.unshift({
         id: Date.now(),
-        text: `${escCfg.label}: ${patName} ΓÇö SOP response required within ${deadline}. ${escReason || ''}`,
+        text: `${escCfg.label}: ${patName} — SOP response required within ${deadline}. ${escReason || ''}`,
         time: 'Just now',
         unread: true
       });
@@ -988,13 +1428,73 @@ class CallManager {
         holdBtn.style.marginRight = '8px';
         holdBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`;
         
-        // Append hold button in the controls row before record button
         const recordBtn = document.getElementById('btn-call-record');
         controls.insertBefore(holdBtn, recordBtn);
         
         holdBtn.addEventListener('click', () => this.toggleHold());
       }
     }
+  }
+
+  showIncomingCallPopup(patientId, patientName, roomName) {
+    const existingPopup = document.getElementById('incoming-call-popup');
+    if (existingPopup) existingPopup.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'incoming-call-popup';
+    popup.style.cssText = [
+      'position: fixed',
+      'top: 0',
+      'left: 0',
+      'right: 0',
+      'bottom: 0',
+      'background: rgba(0,0,0,0.8)',
+      'z-index: 10000',
+      'display: flex',
+      'align-items: center',
+      'justify-content: center',
+      'flex-direction: column'
+    ].join(';');
+
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background: rgb(30,41,59)',
+      'border-radius: 16px',
+      'padding: 32px',
+      'text-align: center',
+      'max-width: 320px',
+      'width: 90%',
+      'border: 2px solid rgb(45,212,191)'
+    ].join(';');
+    card.innerHTML = `
+      <div style="color: rgb(45,212,191); font-size: 18px; font-weight: bold; margin-bottom: 16px;">INCOMING CALL</div>
+      <div style="color: white; font-size: 24px; font-weight: bold; margin-bottom: 8px;">${escapeHtml(patientName || patientId)}</div>
+      <div style="color: rgb(148,163,184); font-size: 14px; margin-bottom: 24px;">Patient is calling for counseling</div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button id="btn-answer-call" style="background: rgb(34,197,94); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Answer</button>
+        <button id="btn-decline-call" style="background: rgb(239,68,68); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Decline</button>
+      </div>
+    `;
+    popup.appendChild(card);
+    document.body.appendChild(popup);
+
+    const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+    const playAudio = () => {
+      audio.play().catch(() => {});
+    };
+    playAudio();
+    const audioInterval = setInterval(playAudio, 2000);
+
+    document.getElementById('btn-answer-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      this.initLiveKit({ id: patientId, name: patientName, counselorId: 'counselor' });
+    };
+    document.getElementById('btn-decline-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      window.CounselFlow.app.showToast('Call Declined', 'Patient call declined.', 'info');
+    };
   }
 
   // Stop active scenario loops if user navigates away (Architecture #43)
@@ -1007,22 +1507,7 @@ class CallManager {
       clearInterval(this.timerInterval);
       this.timerInterval = null;
     }
-    if (this.isRelayMode) {
-      this.stopSocketAudioRelay();
-    }
     this.clearCanvas();
-  }
-
-  startSocketAudioRelay() {
-    if (!this.patientSocketId || !this.localStream) return;
-    this.isRelayMode = true;
-    if (this.socket) {
-      this.socket.emit('audio-relay-start', { to: this.patientSocketId });
-    }
-  }
-
-  stopSocketAudioRelay() {
-    this.isRelayMode = false;
   }
 }
 

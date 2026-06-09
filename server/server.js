@@ -15,6 +15,7 @@ const { Patient, CallLog, AuditTrail, Counselor, MedicationLog, Medicine, OpdVis
 const { AccessToken } = require('livekit-server-sdk');
 const admin = require('firebase-admin');
 const fs = require('fs');
+const { SarvamAIClient } = require('sarvamai');
 
 // Initialize Firebase Admin conditionally
 const firebaseCredsPath = process.env.FIREBASE_CREDENTIALS_PATH || path.join(__dirname, '../google-services.json');
@@ -794,38 +795,35 @@ app.post('/api/ai/chat/completions', async (req, res) => {
 
 app.post('/api/ai/audio/transcriptions', upload.single('file'), async (req, res) => {
   try {
-    let apiKey = process.env.GROQ_API_KEY;
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      const headerKey = req.headers.authorization.split(' ')[1];
-      if (headerKey && headerKey.trim() !== '') {
-        apiKey = headerKey;
-      }
-    }
-    
-    if (!apiKey || apiKey === 'your_groq_api_key_here') {
-      return res.status(401).json({ error: { message: "GROQ_API_KEY not configured or provided" } });
-    }
+    let apiKey = process.env.SARVAM_API_KEY || 'sk_5ecrzrs1_lPbP9vkwT5k8tQwnJPnDvpiY';
     
     if (!req.file) {
       return res.status(400).json({ error: { message: "No file provided" } });
     }
 
     const form = new FormData();
-    form.append('file', req.file.buffer, req.file.originalname || 'chunk.webm');
-    
-    // Append all other fields from the frontend request
-    Object.keys(req.body).forEach(key => {
-      form.append(key, req.body[key]);
+    form.append('file', req.file.buffer, { 
+      filename: req.file.originalname || 'chunk.webm', 
+      contentType: req.file.mimetype || 'audio/webm' 
     });
+    
+    // Map frontend language parameter to Sarvam's language_code
+    const inputLang = req.body.language || 'en';
+    const langMap = { 'en': 'en-IN', 'hi': 'hi-IN', 'pa': 'pa-IN' };
+    const sarvamLang = langMap[inputLang] || 'hi-IN';
+    
+    form.append('model', 'saaras:v3');
+    form.append('language_code', sarvamLang);
 
-    const response = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', form, {
+    const response = await axios.post('https://api.sarvam.ai/speech-to-text', form, {
       headers: {
         ...form.getHeaders(),
-        'Authorization': `Bearer ${apiKey}`
+        'api-subscription-key': apiKey
       }
     });
 
-    res.json(response.data);
+    // Sarvam API returns { transcript: "..." }. Frontend expects { text: "..." }
+    res.json({ text: response.data.transcript || '' });
   } catch (error) {
     console.error("AI Proxy Error (audio):", error.response?.data || error.message);
     res.status(error.response?.status || 500).json(error.response?.data || { error: { message: error.message } });
@@ -929,6 +927,9 @@ const counselorSockets = {}; // counselorId (or 'counselor') -> socketId
 // Audio relay sessions: when WebRTC P2P fails, audio is relayed through server
 // relayPairs[socketIdA] = socketIdB  and  relayPairs[socketIdB] = socketIdA
 const relayPairs = {};
+
+// Sarvam Streaming STT sessions: socketId -> { sarvamSocket, speaker }
+const sarvamStreams = {};
 
 io.on('connection', (socket) => {
   console.log(`⚡ Socket connected: ${socket.id}`);
@@ -1118,9 +1119,149 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ==========================================
+  // SARVAM STREAMING STT — Real-time Speech-to-Text
+  // Browser sends raw PCM audio chunks; server relays to Sarvam WebSocket
+  // and broadcasts transcript events back to the browser.
+  // ==========================================
+
+  socket.on('start-stt-stream', async (data) => {
+    // data = { speaker: 'Counselor' | 'Patient', language: 'hi-IN', mode: 'codemix' }
+    const speaker = data.speaker || 'Unknown';
+    const language = data.language || 'hi-IN';
+    const mode = data.mode || 'codemix';
+    const streamKey = `${socket.id}_${speaker}`;
+
+    // Close any existing stream for this speaker on this socket
+    if (sarvamStreams[streamKey]) {
+      try { sarvamStreams[streamKey].close(); } catch (e) {}
+      delete sarvamStreams[streamKey];
+    }
+
+    const apiKey = process.env.SARVAM_API_KEY;
+    if (!apiKey) {
+      console.error('[Sarvam STT] SARVAM_API_KEY not set in .env');
+      socket.emit('stt-error', { message: 'SARVAM_API_KEY not configured on server.' });
+      return;
+    }
+
+    try {
+      const client = new SarvamAIClient({ apiSubscriptionKey: apiKey });
+      const sarvamSocket = await client.speechToTextStreaming.connect({
+        model: 'saaras:v3',
+        mode: mode,
+        'language-code': language,
+        high_vad_sensitivity: 'true',
+        vad_signals: 'true',
+        reconnectAttempts: 3
+      });
+
+      sarvamSocket.on('open', () => {
+        console.log(`[Sarvam STT] Stream opened for ${speaker} on socket ${socket.id}`);
+      });
+
+      sarvamSocket.on('message', (msg) => {
+        // msg is a parsed JSON object from Sarvam
+        if (msg.type === 'events' && msg.data) {
+          // VAD signals: START_SPEECH / END_SPEECH
+          socket.emit('stt-vad-event', {
+            speaker: speaker,
+            signalType: msg.data.signal_type
+          });
+        } else if (msg.type === 'data' && msg.data && msg.data.transcript) {
+          // Final transcript
+          socket.emit('stt-transcript', {
+            speaker: speaker,
+            text: msg.data.transcript
+          });
+        } else if (msg.transcript) {
+          // Fallback format: direct transcript field
+          socket.emit('stt-transcript', {
+            speaker: speaker,
+            text: msg.transcript
+          });
+        }
+      });
+
+      sarvamSocket.on('error', (err) => {
+        console.error(`[Sarvam STT] Error for ${speaker}:`, err.message);
+        socket.emit('stt-error', { speaker: speaker, message: err.message });
+      });
+
+      sarvamSocket.on('close', (event) => {
+        console.log(`[Sarvam STT] Stream closed for ${speaker}. Code: ${event?.code || 'unknown'}`);
+        delete sarvamStreams[streamKey];
+      });
+
+      await sarvamSocket.waitForOpen();
+      sarvamStreams[streamKey] = sarvamSocket;
+      socket.emit('stt-stream-ready', { speaker: speaker });
+      console.log(`[Sarvam STT] ✅ Stream ready for ${speaker}`);
+    } catch (err) {
+      console.error(`[Sarvam STT] Failed to start stream for ${speaker}:`, err);
+      socket.emit('stt-error', { speaker: speaker, message: err.message });
+    }
+  });
+
+  // Receive raw PCM audio chunk (base64) from browser and forward to Sarvam
+  socket.on('stt-audio-chunk', (data) => {
+    // data = { speaker: 'Counselor' | 'Patient', audio: '<base64 string>' }
+    const streamKey = `${socket.id}_${data.speaker}`;
+    const sarvamSocket = sarvamStreams[streamKey];
+    if (sarvamSocket) {
+      try {
+        sarvamSocket.transcribe({
+          audio: data.audio,
+          sample_rate: 16000,
+          encoding: 'pcm_s16le'
+        });
+      } catch (err) {
+        console.error(`[Sarvam STT] Error sending chunk for ${data.speaker}:`, err.message);
+      }
+    }
+  });
+
+  // Flush the Sarvam buffer (force partial transcript finalization)
+  socket.on('stt-flush', (data) => {
+    const streamKey = `${socket.id}_${data.speaker}`;
+    const sarvamSocket = sarvamStreams[streamKey];
+    if (sarvamSocket) {
+      try { sarvamSocket.flush(); } catch (e) {}
+    }
+  });
+
+  // Stop a specific Sarvam STT stream
+  socket.on('stop-stt-stream', (data) => {
+    const speaker = data?.speaker;
+    if (speaker) {
+      const streamKey = `${socket.id}_${speaker}`;
+      if (sarvamStreams[streamKey]) {
+        try { sarvamStreams[streamKey].close(); } catch (e) {}
+        delete sarvamStreams[streamKey];
+        console.log(`[Sarvam STT] Stream stopped for ${speaker} on socket ${socket.id}`);
+      }
+    } else {
+      // Stop all streams for this socket
+      for (const key of Object.keys(sarvamStreams)) {
+        if (key.startsWith(socket.id + '_')) {
+          try { sarvamStreams[key].close(); } catch (e) {}
+          delete sarvamStreams[key];
+        }
+      }
+      console.log(`[Sarvam STT] All streams stopped for socket ${socket.id}`);
+    }
+  });
+
   // Disconnect handler
   socket.on('disconnect', () => {
     console.log(`🔴 Socket disconnected: ${socket.id}`);
+    // Cleanup Sarvam STT streams
+    for (const key of Object.keys(sarvamStreams)) {
+      if (key.startsWith(socket.id + '_')) {
+        try { sarvamStreams[key].close(); } catch (e) {}
+        delete sarvamStreams[key];
+      }
+    }
     // Cleanup relay pair
     if (relayPairs[socket.id]) {
       io.to(relayPairs[socket.id]).emit('audio-relay-stop');

@@ -10,6 +10,10 @@
   <!-- Include SheetJS for Excel parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <link rel="stylesheet" href="css/styles.css">
+  <style>
+    .vad-indicator { transition: all 0.2s ease; }
+    .vad-indicator.speaking { background: rgba(0, 242, 254, 0.15) !important; color: var(--accent-blue); font-weight: 600; border-color: rgba(0, 242, 254, 0.4) !important; }
+  </style>
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -495,11 +499,15 @@
           <!-- Right side: Real-time Transcript & Post-Call Summary Processing -->
           <div style="display: flex; flex-direction: column; height: 100%; min-width: 0;">
             <div class="call-console-details">
-            <div class="console-header">
-              <h3>Live Transcription Feed</h3>
-              <div class="status-indicator">
-                <div class="status-dot" id="call-status-dot"></div>
-                <span id="call-status-label">Idle</span>
+            <div class="console-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+              <h3 style="margin:0;">Live Transcription Feed</h3>
+              <div style="display:flex; gap:12px; align-items:center;">
+                <span id="vad-indicator-Counselor" class="vad-indicator" style="font-size:11px; padding:4px 8px; border-radius:12px; background:var(--bg-input); border:1px solid var(--border-light);">Counselor: Silent</span>
+                <span id="vad-indicator-Patient" class="vad-indicator" style="font-size:11px; padding:4px 8px; border-radius:12px; background:var(--bg-input); border:1px solid var(--border-light);">Patient: Silent</span>
+                <div class="status-indicator" style="margin-left:8px;">
+                  <div class="status-dot" id="call-status-dot"></div>
+                  <span id="call-status-label">Idle</span>
+                </div>
               </div>
             </div>
             

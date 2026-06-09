@@ -318,7 +318,7 @@ The JSON object must have EXACTLY these fields:
     }
   }
 
-  // ── Live Whisper Transcription (Replaces flaky Web Speech API)
+  // ── Live Sarvam Transcription (Replaces flaky Web Speech API)
   async transcribeAudioChunkAsync(audioBlob, languageCode = 'en') {
 
     // Skip sending if the audio chunk is too small (prevents 400 Bad Requests and reduces hallucinations on silence)
@@ -326,37 +326,15 @@ The JSON object must have EXACTLY these fields:
 
     try {
       const formData = new FormData();
-      // Groq Whisper supports flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
       formData.append("file", audioBlob, "chunk.webm");
-      formData.append("model", "whisper-large-v3-turbo");
-      // Force language to prevent hallucinations in other languages (like Hungarian or Spanish)
-      let whisperLang = 'en';
-      if (languageCode.startsWith('hi')) whisperLang = 'hi';
-      else if (languageCode.startsWith('pa')) whisperLang = 'pa';
-      formData.append("language", whisperLang);
       
-      formData.append("response_format", "json");
-      // Ask Whisper to not transcribe if the audio is likely silence
-      // (Removed hardcoded prompt and temperature per user request)
-      
-      // ── Smart language hinting ─────────────────────────────────────
-      // Only pass a language hint when we're confident of the dominant language.
-      // Whisper auto-detect works well for English but benefits from hints
-      // for Indic languages. Map BCP-47 codes to ISO-639-1.
-      const langMap = { 'pa-IN': 'pa', 'hi-IN': 'hi', 'en-US': 'en' };
-      const langHint = langMap[languageCode] || null;
-      if (langHint) {
-        formData.append("language", langHint);
-      }
-
-      // Rich trilingual domain prompt — gives Whisper vocabulary hints for
-      // medical/counseling terminology in English, Hindi, and Punjabi
-      const domainPrompt =
-        'नमस्ते डॉक्टर साहब, मुझे बहुत मदद चाहिए। ਸਤਿ ਸ੍ਰੀ ਅਕਾਲ ਜੀ, ਮੈਨੂੰ ਦਵਾਈ ਅਤੇ ਇਲਾਜ ਬਾਰੇ ਦੱਸੋ। My health is improving, thank you. हाँ जी, दवाई ठीक समय पर खाओ।';
-      formData.append("prompt", domainPrompt);
+      // Determine language for the backend to map to Sarvam's language_code
+      let reqLang = 'en';
+      if (languageCode.startsWith('hi')) reqLang = 'hi';
+      else if (languageCode.startsWith('pa')) reqLang = 'pa';
+      formData.append("language", reqLang);
 
       const token = window.localStorage.getItem('counseling_logged_in_token');
->>>>>>> 6ea9da5cf8bec3b76be23cb16d028274f0775259
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
@@ -378,7 +356,7 @@ The JSON object must have EXACTLY these fields:
       const data = await response.json();
       return data.text ? data.text.trim() : null;
     } catch (e) {
-      console.error("Whisper Transcription failed:", e);
+      console.error("Sarvam Transcription failed:", e);
       return null;
     }
   }
