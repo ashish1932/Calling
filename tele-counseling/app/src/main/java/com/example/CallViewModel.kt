@@ -38,7 +38,7 @@ class CallViewModel(application: Application) : AndroidViewModel(application) {
     val transcript: StateFlow<List<TranscriptLine>> = _transcript.asStateFlow()
 
     private val _serverUrl = MutableStateFlow(
-        prefs.getString("serverUrl", "https://altitude-quintuple-compile.ngrok-free.dev") ?: "https://altitude-quintuple-compile.ngrok-free.dev"
+        prefs.getString("serverUrl", "https://economist-slideshow-flannels.ngrok-free.dev") ?: "https://economist-slideshow-flannels.ngrok-free.dev"
     )
     val serverUrl: StateFlow<String> = _serverUrl.asStateFlow()
 
