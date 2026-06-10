@@ -23,7 +23,7 @@ window.CounselFlow.CONFIG = {
   INACTIVITY_LIMIT_MS: 2 * 60 * 60 * 1000, // 2 hours
   ASR_MAX_RETRY_COUNT: 3,
   ASR_RETRY_DELAY_MS: 3000,
-  ENABLE_REAL_CALLS: false, // Set false for simulation/demo mode — no real calls placed
+  ENABLE_REAL_CALLS: true, // Set false for simulation/demo mode — no real calls placed
   STATUSES: {
     ACTIVE: 'Active',
     MONITORED: 'Monitored',
@@ -40,25 +40,13 @@ window.CounselFlow.CONFIG = {
     HINDI: 'hi-IN',
     ENGLISH: 'en-US'
   },
-  GROQ_API_KEY: (() => {
-    try {
-      return window.localStorage.getItem("counseling_groq_api_key") || "";
-    } catch (e) {
-      return "";
-    }
-  })(),
-  GEMINI_API_KEY: (() => {
-    try {
-      return window.localStorage.getItem("counseling_gemini_api_key") || "";
-    } catch (e) {
-      return "";
-    }
-  })(),
+  GROQ_API_KEY: "",
+  GEMINI_API_KEY: "",
   AI_PROVIDER: (() => {
     try {
-      return window.localStorage.getItem("counseling_ai_provider") || "groq";
+      return window.localStorage.getItem("counseling_ai_provider") || "gemini";
     } catch (e) {
-      return "groq";
+      return "gemini";
     }
   })(),
   DEFAULT_SETTINGS: {
@@ -909,10 +897,12 @@ window.CounselFlow.API_BASE = (() => {
   return `${origin}/api`;
 })();
 const API_BASE = window.CounselFlow.API_BASE;
-// Inject ngrok bypass header into all fetch requests targeting our API
+// Inject headers into all fetch requests targeting our API
 const originalFetch = window.fetch;
 window.fetch = async function(resource, config) {
+  let isApiCall = false;
   if (typeof resource === 'string' && resource.includes(API_BASE)) {
+    isApiCall = true;
     config = config || {};
     config.headers = config.headers || {};
     if (config.headers instanceof Headers) {
@@ -922,8 +912,21 @@ window.fetch = async function(resource, config) {
       config.headers['ngrok-skip-browser-warning'] = '1';
       config.headers['X-Requested-With'] = 'XMLHttpRequest';
     }
+    const token = window.localStorage.getItem('counseling_logged_in_token');
+    if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
   }
-  return originalFetch(resource, config);
+  const response = await originalFetch(resource, config);
+  if (isApiCall && response.status === 401 && !resource.includes('/auth/')) {
+    console.warn("Session expired or unauthorized. Logging out.");
+    window.localStorage.removeItem('counseling_active_role');
+    window.localStorage.removeItem('counseling_logged_in_name');
+    window.localStorage.removeItem('counseling_logged_in_staff');
+    window.localStorage.removeItem('counseling_logged_in_token');
+    window.location.reload();
+  }
+  return response;
 };
 async function getStoredPatients() {
   //  Version-aware reseed check 
@@ -931,10 +934,10 @@ async function getStoredPatients() {
   // a reseed so new INITIAL_PATIENTS always appear after a data update.
   const storedVersion = safeGetItem('counseling_schema_version');
   const currentVersion = window.CounselFlow.CONFIG.SCHEMA_VERSION.toString();
-  const needsReseed = !storedVersion;
+  let needsReseed = !storedVersion;
   if (storedVersion && storedVersion !== currentVersion) {
     console.warn(`[DataSeed] Schema version mismatch (${storedVersion} → ${currentVersion}). Migrating gracefully...`);
-    safeSetItem('counseling_schema_version', currentVersion);
+    needsReseed = true;
   }
   if (needsReseed) {
     console.info(`[DataSeed] Initializing demo data...`);
@@ -959,7 +962,16 @@ async function getStoredPatients() {
   // 
   if (!navigator.onLine) {
     const rawData = safeGetItem("counseling_patients");
-    return rawData ? await deobfuscateData(rawData) : INITIAL_PATIENTS;
+    if (rawData) {
+      try {
+        return await deobfuscateData(rawData);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption failed, resetting store:", decryptErr);
+        safeSetItem('counseling_schema_version', '');
+        return INITIAL_PATIENTS;
+      }
+    }
+    return INITIAL_PATIENTS;
   }
   try {
     const res = await fetch(`${API_BASE}/patients`);
@@ -974,7 +986,16 @@ async function getStoredPatients() {
   } catch (err) {
     console.error("Backend fetch failed, falling back to local storage:", err);
     const rawData = safeGetItem("counseling_patients");
-    return rawData ? await deobfuscateData(rawData) : INITIAL_PATIENTS;
+    if (rawData) {
+      try {
+        return await deobfuscateData(rawData);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption failed, resetting store:", decryptErr);
+        safeSetItem('counseling_schema_version', '');
+        return INITIAL_PATIENTS;
+      }
+    }
+    return INITIAL_PATIENTS;
   }
 }
 async function savePatients(patients) {
@@ -982,13 +1003,17 @@ async function savePatients(patients) {
   safeSetItem("counseling_schema_version", window.CounselFlow.CONFIG.SCHEMA_VERSION.toString());
   if (navigator.onLine) {
     try {
-      await fetch(`${API_BASE}/patients`, {
+      const res = await fetch(`${API_BASE}/patients`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
         body: JSON.stringify(patients)
       });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
     } catch (err) {
       console.error("Failed to sync patients to backend:", err);
+      if (window.CounselFlow && window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
+        window.CounselFlow.app.showToast("Sync Error", "Failed to save patients to backend.", "error");
+      }
     }
   }
 }
@@ -997,7 +1022,15 @@ async function getStoredCallLogs() {
   const defaultLogs = INITIAL_CALL_LOGS;
   if (!navigator.onLine) {
     const rawLogs = safeGetItem("counseling_call_logs");
-    return rawLogs ? await deobfuscateData(rawLogs) : defaultLogs;
+    if (rawLogs) {
+      try {
+        return await deobfuscateData(rawLogs);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption of call logs failed:", decryptErr);
+        return defaultLogs;
+      }
+    }
+    return defaultLogs;
   }
   try {
     const res = await fetch(`${API_BASE}/call-logs`);
@@ -1012,7 +1045,15 @@ async function getStoredCallLogs() {
   } catch (err) {
     console.error("Backend fetch failed, falling back to local storage:", err);
     const rawLogs = safeGetItem("counseling_call_logs");
-    return rawLogs ? await deobfuscateData(rawLogs) : defaultLogs;
+    if (rawLogs) {
+      try {
+        return await deobfuscateData(rawLogs);
+      } catch (decryptErr) {
+        console.warn("Local storage decryption of call logs failed:", decryptErr);
+        return defaultLogs;
+      }
+    }
+    return defaultLogs;
   }
 }
 async function saveCallLogs(logs) {
@@ -1277,12 +1318,16 @@ async function generateEventHash(eventObj) {
       const hashArray = Array.from(new Uint8Array(hashBuffer));
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
     } catch (e) {
-      console.warn("crypto.subtle failed, falling back to XXTEA hash", e);
+      console.warn("crypto.subtle failed, falling back to simple hash", e);
     }
   }
-  // Fallback for non-HTTPS origins where crypto.subtle is undefined
-  const signed = xxtea_encrypt(payload, window.CounselFlow.CONFIG.ENCRYPTION_KEY);
-  return btoa(unescape(encodeURIComponent(signed))).slice(0, 32);
+  const hash = 0;
+  for (let i = 0; i < payload.length; i++) {
+    const char = payload.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(16).padStart(2, '0').repeat(16).slice(0, 32);
 }
 async function getAuditTrail() {
   if (!navigator.onLine) {
@@ -1422,11 +1467,15 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
+    const token = window.localStorage.getItem('counseling_logged_in_token');
     const headers = { 
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
       "ngrok-skip-browser-warning": "1"
     };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
     if (provider === 'gemini') {
       if (window.CounselFlow.CONFIG.GEMINI_API_KEY) {
         headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GEMINI_API_KEY}`;
@@ -1685,29 +1734,25 @@ The JSON object must have EXACTLY these fields:
       throw e;
     }
   }
-  // ── Live Whisper Transcription (Replaces flaky Web Speech API)
+  // ── Live Sarvam Transcription (Replaces flaky Web Speech API)
   async transcribeAudioChunkAsync(audioBlob, languageCode = 'en') {
     // Skip sending if the audio chunk is too small (prevents 400 Bad Requests and reduces hallucinations on silence)
     if (audioBlob.size < 1000) return null;
     try {
       const formData = new FormData();
-      // Groq Whisper supports flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm
       formData.append("file", audioBlob, "chunk.webm");
-      formData.append("model", "whisper-large-v3-turbo");
-      // Force language to prevent hallucinations in other languages (like Hungarian or Spanish)
-      let whisperLang = 'en';
-      if (languageCode.startsWith('hi')) whisperLang = 'hi';
-      else if (languageCode.startsWith('pa')) whisperLang = 'pa';
-      formData.append("language", whisperLang);
-      formData.append("response_format", "json");
-      // Ask Whisper to not transcribe if the audio is likely silence
-      // (Removed hardcoded prompt and temperature per user request)
+      // Determine language for the backend to map to Sarvam's language_code
+      let reqLang = 'en';
+      if (languageCode.startsWith('hi')) reqLang = 'hi';
+      else if (languageCode.startsWith('pa')) reqLang = 'pa';
+      formData.append("language", reqLang);
+      const token = window.localStorage.getItem('counseling_logged_in_token');
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"
       };
-      if (window.CounselFlow.CONFIG.GROQ_API_KEY) {
-        headers["Authorization"] = `Bearer ${window.CounselFlow.CONFIG.GROQ_API_KEY}`;
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
       }
       const response = await fetch(`${window.CounselFlow.API_BASE}/ai/audio/transcriptions`, {
         method: "POST",
@@ -1721,7 +1766,7 @@ The JSON object must have EXACTLY these fields:
       const data = await response.json();
       return data.text ? data.text.trim() : null;
     } catch (e) {
-      console.error("Whisper Transcription failed:", e);
+      console.error("Sarvam Transcription failed:", e);
       return null;
     }
   }
@@ -2218,12 +2263,24 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
   });
-  function getLocalCounselors() {
+  async function getLocalCounselors() {
     let local = [];
     try {
+      if (navigator.onLine) {
+        const res = await fetch(`${window.CounselFlow.API_BASE}/counselors`);
+        if (res.ok) {
+          local = await res.json();
+          localStorage.setItem('counseling_counselors', JSON.stringify(local));
+        }
+      } else {
+        const stored = localStorage.getItem('counseling_counselors');
+        if (stored) local = JSON.parse(stored);
+      }
+    } catch(e) {
+      console.warn("Failed to fetch counselors from backend:", e);
       const stored = localStorage.getItem('counseling_counselors');
       if (stored) local = JSON.parse(stored);
-    } catch(e) {}
+    }
     // Merge with DEMO_CREDENTIALS
     const base = window.CounselFlow.DEMO_CREDENTIALS.filter(c => c.roleKey === 'counsellor' || c.roleKey === 'ddrc').map(c => ({
       id: c.staffId,
@@ -2244,7 +2301,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     return base;
   }
-  function saveLocalCounselor(data) {
+  async function saveLocalCounselor(data) {
      let local = [];
      try {
        const stored = localStorage.getItem('counseling_counselors');
@@ -2254,8 +2311,19 @@ document.addEventListener('DOMContentLoaded', () => {
      if (idx >= 0) local[idx] = data;
      else local.push(data);
      localStorage.setItem('counseling_counselors', JSON.stringify(local));
+     if (navigator.onLine) {
+       try {
+         await fetch(`${window.CounselFlow.API_BASE}/counselors`, {
+           method: 'POST',
+           headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+           body: JSON.stringify([data])
+         });
+       } catch (err) {
+         console.error("Failed to sync counselor to backend:", err);
+       }
+     }
   }
-  function deleteLocalCounselor(id) {
+  async function deleteLocalCounselor(id) {
      let local = [];
      try {
        const stored = localStorage.getItem('counseling_counselors');
@@ -2263,12 +2331,24 @@ document.addEventListener('DOMContentLoaded', () => {
      } catch(e) {}
      local = local.filter(l => l.id !== id);
      localStorage.setItem('counseling_counselors', JSON.stringify(local));
+     if (navigator.onLine) {
+       try {
+         await fetch(`${window.CounselFlow.API_BASE}/counselors/${id}`, {
+           method: 'DELETE',
+           headers: { 'X-Requested-With': 'XMLHttpRequest' }
+         });
+       } catch (err) {
+         console.error("Failed to delete counselor from backend:", err);
+       }
+     }
   }
   function renderUI() {
      updateExportButton();
      if (currentTab === 'patients') renderPatientsProfileUI();
      else renderCounselorsProfileUI();
   }
+  window.CounselFlow = window.CounselFlow || {};
+  window.CounselFlow.renderProfilesList = renderUI;
   async function renderPatientsProfileUI() {
     // Gap 1: Decouple from dead API, use local app state
     let patients = window.CounselFlow && window.CounselFlow.app ? window.CounselFlow.app.patients : [];
@@ -2343,7 +2423,7 @@ document.addEventListener('DOMContentLoaded', () => {
     gridContainer.innerHTML = html;
   }
   async function renderCounselorsProfileUI() {
-    let counselors = getLocalCounselors();
+    let counselors = await getLocalCounselors();
     const activeRole = getActiveRole();
     const staffId = window.CounselFlow.safeGetItem('counseling_logged_in_staff') || '';
     if (activeRole === 'counsellor') {
@@ -2415,7 +2495,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     gridContainer.innerHTML = html;
   }
-  container.addEventListener('click', (e) => {
+  container.addEventListener('click', async (e) => {
     const action = e.target.closest('[data-action]')?.dataset.action;
     if (!action) return;
     const id = e.target.closest('[data-id]')?.dataset.id;
@@ -2444,7 +2524,8 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('counselor-form-modal').style.display = 'flex';
       document.getElementById('counselor-overlay').style.display = 'block';
     } else if (action === 'edit-counselor' && id) {
-      const c = getLocalCounselors().find(x => x.id === id);
+      const counselors = await getLocalCounselors();
+      const c = counselors.find(x => x.id === id);
       if (!c) return;
       document.getElementById('counselor-profile-form').reset();
       Object.keys(c).forEach(k => {
@@ -2455,7 +2536,7 @@ document.addEventListener('DOMContentLoaded', () => {
       document.getElementById('counselor-overlay').style.display = 'block';
     } else if (action === 'delete-counselor' && id) {
       if (confirm('Are you sure you want to delete this counselor profile? This action cannot be undone.')) {
-         deleteLocalCounselor(id);
+         await deleteLocalCounselor(id);
          window.CounselFlow.writeAuditEvent('COUNSELOR_PROFILE_DELETED', id, 'N/A', getActiveRole(), 'Deleted counselor profile via Profiles Management');
          renderUI();
       }
@@ -2470,9 +2551,9 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (!data.id) {
-       data.id = data.staffId || generateId('C');
+       data.id = data.staffId || ('C-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
     }
-    saveLocalCounselor(data);
+    await saveLocalCounselor(data);
     window.CounselFlow.writeAuditEvent('COUNSELOR_PROFILE_UPDATED', data.id, 'N/A', getActiveRole(), 'Updated counselor profile via Profiles Management');
     document.getElementById('counselor-form-modal').style.display = 'none';
     document.getElementById('counselor-overlay').style.display = 'none';
@@ -2493,6 +2574,7 @@ class CallManager {
     this.isHeld = false; // UX #47: Hold state toggle
     this.duration = 0;
     this.timerInterval = null;
+    this.whisperQueue = Promise.resolve(); // Issue 2: Initialize whisperQueue
     this.canvas = null;
     this.ctx = null;
     this.animationFrame = null;
@@ -2543,6 +2625,10 @@ class CallManager {
     this.relayAudioCtx = null;       // AudioContext for playing received relay chunks
     this.relaySourceQueue = [];      // Queue of scheduled audio sources
     this.relayNextPlayTime = 0;      // Gapless scheduling clock
+    // Sarvam Streaming STT state
+    this.sttAudioContexts = {};      // speaker -> AudioContext used for PCM extraction
+    this.sttProcessors = {};         // speaker -> ScriptProcessorNode
+    this.sttStreamsActive = {};       // speaker -> boolean
     this.initSocket();
   }
   // Initialize Socket.io connection for Counselor
@@ -2612,6 +2698,123 @@ class CallManager {
         this.patientSocketId = null;
         this.endCall();
       });
+this.socket.on('dashboard-observe-call', async (data) => {
+         if (!this.room && data.roomName) {
+             console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
+             try {
+                 const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                 const resp = await fetch('/api/livekit/token', {
+                     method: 'POST',
+                     headers: { 
+                       'Content-Type': 'application/json',
+                       'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                       'X-Requested-With': 'XMLHttpRequest'
+                     },
+                     body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                 });
+                 const tokenData = await resp.json();
+                 if (tokenData.token && window.LivekitClient) {
+                     this.isActive = true;
+                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
+                     window.CounselFlow.app.switchScreen('call-console');
+                     this.duration = 0;
+                     this.timerInterval = setInterval(() => {
+                       this.duration++;
+                       const hrs = Math.floor(this.duration / 3600).toString();
+                       const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                       const secs = (this.duration % 60).toString().padStart(2, '0');
+                       const timerEl = document.getElementById('call-duration-timer');
+                       if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                     }, 1000);
+                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                         if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                             const element = track.attach();
+                             document.body.appendChild(element);
+                             if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                             const stream = new MediaStream([track.mediaStreamTrack]);
+                             const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                             this.setupStreamingSTT(stream, speakerName);
+                         }
+                     });
+                     this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                         console.log('[LiveKit] Participant disconnected:', participant.identity);
+                         window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                         this.endCall();
+                     });
+                     this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                         console.log('[LiveKit] Room disconnected.');
+                         this.endCall();
+                     });
+                     // Listen for transcription from mobile clients
+                     this.socket.on('transcription', (transcriptData) => {
+                         if (transcriptData && transcriptData.roomName === data.roomName && transcriptData.text) {
+                             const speaker = transcriptData.speaker === 'counselor' ? 'Counselor' : 'Patient';
+                             this.addTranscriptLine(speaker, transcriptData.text);
+                         }
+                     });
+                     await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                     window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                 }
+             } catch (err) {
+                 console.error('[LiveKit] Failed to observe call:', err);
+             }
+         }
+       });
+       // Handle inbound call notifications (patient calling counselor)
+       this.socket.on('incoming-call', (data) => {
+         console.log('[WebRTC] Incoming call from patient:', data.patientName || data.patientId);
+         if (!this.isActive) {
+           this.showIncomingCallPopup(data.patientId, data.patientName, data.roomName);
+         }
+       });
+       // Handle transcript updates during LiveKit calls
+       this.socket.on('transcript-update', (data) => {
+         if (data && data.text && this.isActive) {
+           const speaker = data.sender === 'counselor' ? 'Counselor' : 'Patient';
+           this.addTranscriptLine(speaker, data.text);
+         }
+       });
+       // ── Sarvam Streaming STT Events ──
+       this.socket.on('stt-transcript', (data) => {
+         if (data && data.text && this.isActive) {
+           // Apply hallucination guard
+           const t = data.text.trim();
+           if (t.length < 2) return;
+           if (/(\S+)(\s+\1){2,}/i.test(t)) return;
+           const HALLUCINATIONS = [
+             'thank you for watching', 'thank you', 'thanks for watching',
+             'please subscribe', 'like and subscribe',
+             'bye bye', 'goodbye', 'see you', 'okay okay okay',
+             '.   .', '. . .', '...',
+           ];
+           const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
+           if (HALLUCINATIONS.some(h => tLower === h)) return;
+           this.addTranscriptLine(data.speaker, data.text);
+         }
+       });
+       this.socket.on('stt-vad-event', (data) => {
+         if (!this.isActive || !data) return;
+         const indicator = document.getElementById(`vad-indicator-${data.speaker}`);
+         if (indicator) {
+           if (data.signalType === 'START_SPEECH') {
+             indicator.classList.add('speaking');
+             indicator.textContent = `${data.speaker}: Speaking...`;
+           } else {
+             indicator.classList.remove('speaking');
+             indicator.textContent = `${data.speaker}: Silent`;
+           }
+         }
+       });
+       this.socket.on('stt-stream-ready', (data) => {
+         console.log(`[Sarvam STT] Stream ready for ${data.speaker}`);
+       });
+       this.socket.on('stt-error', (data) => {
+         console.error('[Sarvam STT] Error:', data.message);
+         if (window.CounselFlow && window.CounselFlow.app) {
+           window.CounselFlow.app.showToast('STT Error', data.message || 'Transcription error.', 'error');
+         }
+       });
     } else {
       console.warn("Socket.io is not loaded.");
     }
@@ -2649,18 +2852,23 @@ class CallManager {
           if (typeof element.play === 'function') {
             element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
           }
-          // Wire up Live Transcription!
+          // Wire up Sarvam Streaming STT!
           const stream = new MediaStream([track.mediaStreamTrack]);
           const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-          if (speakerName === "Counselor") {
-            this.counselorRecorder = this.setupChunkedRecorder(stream, speakerName);
-          } else {
-            this.patientRecorder = this.setupChunkedRecorder(stream, speakerName);
-          }
+          this.setupStreamingSTT(stream, speakerName);
         }
       });
       this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
         track.detach();
+      });
+      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+        console.log('[LiveKit] Participant disconnected:', participant.identity);
+        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+        this.endCall();
+      });
+      this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+        console.log('[LiveKit] Room disconnected.');
+        this.endCall();
       });
       // Connect to LiveKit Room
       await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', data.token);
@@ -2727,10 +2935,11 @@ class CallManager {
     }
     const recorder = new MediaRecorder(stream, options);
     recorder.ondataavailable = async (event) => {
-      if (event.data.size > 0 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
-        this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
-          const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
-          if (transcript && this.isActive) {
+      try {
+        if (event.data.size > 1500 && this.isActive && (!this.isMuted || speaker === "Patient") && !this.isHeld) {
+          this.whisperQueue = (this.whisperQueue || Promise.resolve()).then(async () => {
+            const transcript = await window.CounselFlow.aiOrchestrator.transcribeAudioChunkAsync(event.data, this.activeLanguage);
+            if (transcript && this.isActive) {
             //  Hallucination Guard 
             const isHallucination = (text) => {
               const t = text.trim();
@@ -2739,6 +2948,30 @@ class CallManager {
               // 3. Known Whisper hallucination blocklist (English / Hindi / Punjabi)
               const HALLUCINATIONS = [
                 "what's going on", "everything is fine", "i'm feeling a bit anxious",
+                "i am feeling very anxious and restless my heart is racing and i am having trouble breathing",
+                "i am feeling very anxious and restless",
+                "i have been experiencing chest pain and shortness of breath for the past few days",
+                "my heart rate is very fast and i am having trouble sleeping",
+                "i am also experiencing palpitations and dizziness",
+                "i am worried that i might be having a heart attack",
+                "i am feeling very scared and anxious",
+                "i am feeling very weak",
+                "doctor",
+                "i am experiencing severe chest pain and difficulty breathing",
+                "i am feeling like i am going to pass out",
+                "i am feeling like i am going to collapse",
+                "i am scared",
+                "i am experiencing chest pain shortness of breath and a feeling of impending doom",
+                "i am feeling like i am going to die",
+                "i am feeling a tightness in my chest and throat",
+                "i am feeling numb my body is shaking and i am having trouble speaking",
+                "i am feeling like i am losing control",
+                "i am experiencing a sense of detachment from my body",
+                "i am feeling like i am floating above myself",
+                "i am feeling a sense of panic and anxiety",
+                "i am feeling like i am going to pass out",
+                "i am feeling a lump in my throat",
+                "i am feeling a sense of dread my heart is racing and i am having trouble breathing",
                 "thank you for watching", "thank you", "thanks for watching",
                 "please subscribe", "like and subscribe",
                 "कर दो", "झाल", "अलवूँ", "जरूर जो",
@@ -2755,11 +2988,17 @@ class CallManager {
               console.debug('[ASR] Filtered hallucination:', transcript);
               return;
             }
-            // 
             this.addTranscriptLine(speaker, transcript);
-          }
-        }).catch(e => console.error("Whisper transcription error:", e));
+            }
+          });
+        }
+      } catch (err) {
+        console.error(`[MediaRecorder] Error processing chunk for ${speaker}:`, err);
       }
+    };
+    // Explicit error handler for recorder
+    recorder.onerror = (e) => {
+      console.error(`[MediaRecorder] Error for ${speaker}:`, e.error);
     };
     recorder.start();
     // Interval to stop and restart so headers are rewritten for the Whisper API
@@ -2773,6 +3012,96 @@ class CallManager {
       }
     }, 4000);
     return recorder;
+  }
+  // ── Sarvam Streaming STT: Extract raw 16kHz PCM from a MediaStream and stream to server
+  setupStreamingSTT(stream, speaker) {
+    if (!stream || !this.socket) return;
+    // Map active language to Sarvam language code
+    const langMap = { 'pa-IN': 'pa-IN', 'hi-IN': 'hi-IN', 'en-US': 'en-IN' };
+    const language = langMap[this.activeLanguage] || 'hi-IN';
+    // 1. Tell the server to open a Sarvam WebSocket for this speaker
+    this.socket.emit('start-stt-stream', {
+      speaker: speaker,
+      language: language,
+      mode: 'codemix'
+    });
+    // 2. Create an AudioContext at 16kHz to downsample browser audio (usually 48kHz)
+    let audioCtx;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    } catch (e) {
+      console.error(`[Sarvam STT] Failed to create AudioContext for ${speaker}:`, e);
+      return;
+    }
+    const source = audioCtx.createMediaStreamSource(stream);
+    // ScriptProcessorNode with bufferSize=4096 (~256ms at 16kHz)
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    this.sttStreamsActive[speaker] = true;
+    processor.onaudioprocess = (e) => {
+      if (!this.isActive || !this.sttStreamsActive[speaker]) return;
+      if (this.isMuted && speaker === 'Counselor') return;
+      if (this.isHeld) return;
+      const float32 = e.inputBuffer.getChannelData(0);
+      // Convert Float32 [-1, 1] to Int16 [-32768, 32767] (pcm_s16le)
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        const s = Math.max(-1, Math.min(1, float32[i]));
+        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      // Convert to base64
+      const uint8 = new Uint8Array(int16.buffer);
+      let binary = '';
+      for (let i = 0; i < uint8.length; i++) {
+        binary += String.fromCharCode(uint8[i]);
+      }
+      const base64Audio = btoa(binary);
+      // Send to server
+      this.socket.emit('stt-audio-chunk', {
+        speaker: speaker,
+        audio: base64Audio
+      });
+    };
+    source.connect(processor);
+    processor.connect(audioCtx.destination); // Required for ScriptProcessor to fire
+    // Store references for cleanup
+    this.sttAudioContexts[speaker] = audioCtx;
+    this.sttProcessors[speaker] = processor;
+    console.log(`[Sarvam STT] PCM extraction started for ${speaker} at ${audioCtx.sampleRate}Hz`);
+  }
+  // Stop all active Sarvam STT streams
+  stopAllStreamingSTT() {
+    for (const speaker of Object.keys(this.sttStreamsActive)) {
+      this.sttStreamsActive[speaker] = false;
+      // Disconnect AudioContext processor
+      if (this.sttProcessors[speaker]) {
+        try { this.sttProcessors[speaker].disconnect(); } catch (e) {}
+        delete this.sttProcessors[speaker];
+      }
+      if (this.sttAudioContexts[speaker]) {
+        try { this.sttAudioContexts[speaker].close(); } catch (e) {}
+        delete this.sttAudioContexts[speaker];
+      }
+    }
+    this.sttStreamsActive = {};
+    // Tell server to close all Sarvam streams for this socket
+    if (this.socket) {
+      this.socket.emit('stop-stt-stream', {});
+    }
+    console.log('[Sarvam STT] All streams stopped.');
+  }
+  // Issue 1: Missing startInteractiveDemo Method
+  startInteractiveDemo() {
+    console.log("[CallManager] Starting interactive demo...");
+    const demoPatient = {
+      id: "DEMO-001",
+      name: "Interactive Demo Patient",
+      severity: "Medium",
+      status: "Active",
+      phone: "+91-0000000000",
+      addictionCategory: "Opioid (Heroin)"
+    };
+    window.CounselFlow.app.switchScreen('call-console');
+    this.startCall(demoPatient);
   }
   // Live Transcription is now triggered directly by LiveKit track subscriptions
   initLiveTranscription() {
@@ -3152,8 +3481,13 @@ class CallManager {
     if (!this.isActive) return;
     // Log call attempt (Connected) (Phase 2, Solution Scope #2)
     this.logCallAttempt(this.activePatient, this.duration, this.callDirection || "Outbound", "Connected");
-    // Copy active transcript to cache and clear (Bug #2)
-    this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript));
+    // Finalize transcripts and push to AI for summarization
+    try {
+      this.lastSessionTranscript = JSON.parse(JSON.stringify(this.#currentTranscript || []));
+    } catch (e) {
+      console.warn("Failed to deep copy transcript, resetting to empty array", e);
+      this.lastSessionTranscript = [];
+    }
     this.#currentTranscript = [];
     this.isActive = false;
     clearInterval(this.timerInterval);
@@ -3174,7 +3508,9 @@ class CallManager {
       this.localStream.getTracks().forEach(t => t.stop());
       this.localStream = null;
     }
-     // Stop Whisper Transcribers
+     // Stop Sarvam Streaming STT
+     this.stopAllStreamingSTT();
+     // Stop legacy Whisper Transcribers (if any still active)
      if (this.counselorRecorder && this.counselorRecorder.state !== "inactive") {
        try { this.counselorRecorder.stop(); } catch(e){}
      }
@@ -3457,12 +3793,67 @@ class CallManager {
         holdBtn.title = 'Hold Call (Press H)';
         holdBtn.style.marginRight = '8px';
         holdBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16" rx="1"></rect><rect x="14" y="4" width="4" height="16" rx="1"></rect></svg>`;
-        // Append hold button in the controls row before record button
         const recordBtn = document.getElementById('btn-call-record');
         controls.insertBefore(holdBtn, recordBtn);
         holdBtn.addEventListener('click', () => this.toggleHold());
       }
     }
+  }
+  showIncomingCallPopup(patientId, patientName, roomName) {
+    const existingPopup = document.getElementById('incoming-call-popup');
+    if (existingPopup) existingPopup.remove();
+    const popup = document.createElement('div');
+    popup.id = 'incoming-call-popup';
+    popup.style.cssText = [
+      'position: fixed',
+      'top: 0',
+      'left: 0',
+      'right: 0',
+      'bottom: 0',
+      'background: rgba(0,0,0,0.8)',
+      'z-index: 10000',
+      'display: flex',
+      'align-items: center',
+      'justify-content: center',
+      'flex-direction: column'
+    ].join(';');
+    const card = document.createElement('div');
+    card.style.cssText = [
+      'background: rgb(30,41,59)',
+      'border-radius: 16px',
+      'padding: 32px',
+      'text-align: center',
+      'max-width: 320px',
+      'width: 90%',
+      'border: 2px solid rgb(45,212,191)'
+    ].join(';');
+    card.innerHTML = `
+      <div style="color: rgb(45,212,191); font-size: 18px; font-weight: bold; margin-bottom: 16px;">INCOMING CALL</div>
+      <div style="color: white; font-size: 24px; font-weight: bold; margin-bottom: 8px;">${escapeHtml(patientName || patientId)}</div>
+      <div style="color: rgb(148,163,184); font-size: 14px; margin-bottom: 24px;">Patient is calling for counseling</div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button id="btn-answer-call" style="background: rgb(34,197,94); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Answer</button>
+        <button id="btn-decline-call" style="background: rgb(239,68,68); color: white; border: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; cursor: pointer;">Decline</button>
+      </div>
+    `;
+    popup.appendChild(card);
+    document.body.appendChild(popup);
+    const audio = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+    const playAudio = () => {
+      audio.play().catch(() => {});
+    };
+    playAudio();
+    const audioInterval = setInterval(playAudio, 2000);
+    document.getElementById('btn-answer-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      this.initLiveKit({ id: patientId, name: patientName, counselorId: 'counselor' });
+    };
+    document.getElementById('btn-decline-call').onclick = () => {
+      clearInterval(audioInterval);
+      popup.remove();
+      window.CounselFlow.app.showToast('Call Declined', 'Patient call declined.', 'info');
+    };
   }
   // Stop active scenario loops if user navigates away (Architecture #43)
   cleanup() {
@@ -3788,16 +4179,28 @@ class AppController {
     this.selectedPatients = new Set();
     this.ddrcQueueSort = 'oldest'; 
     this.currentPatientFilter = { query: '', severity: 'all', status: 'all', minAge: '', maxAge: '', startDate: '', endDate: '' };
+    this.currentWorkflowFilter = { query: '', sort: 'newest' };
     this.notifications = [];
     this.inactivityTimeout = null;
     this.inactivityLimit = window.CounselFlow.CONFIG.INACTIVITY_LIMIT_MS; 
     this.dom = {};
+    this.onlinePatientIds = [];
     this.initRoleGate = this.initRoleGate.bind(this);
     this.renderSettingsTab = this.renderSettingsTab.bind(this);
     this.renderCallConsole = this.renderCallConsole.bind(this);
   }
   async init() {
+    try {
+      window.localStorage.removeItem('counseling_groq_api_key');
+      window.localStorage.removeItem('counseling_gemini_api_key');
+    } catch (e) {}
     this.cacheDOMElements();
+    const activeRole = window.CounselFlow.getActiveRole();
+    const loggedInName = window.CounselFlow.safeGetItem('counseling_logged_in_name');
+    if (!activeRole || !loggedInName) {
+      this.showLoginScreen();
+      return;
+    }
     this.patients = await window.CounselFlow.getStoredPatients();
     this.patients.forEach(pt => {
       if (!pt.history) pt.history = [];
@@ -3808,6 +4211,7 @@ class AppController {
     });
     this.bindNavigation();
     this.bindSearchAndFilters();
+    this.bindWorkflowSearchAndSort();
     const btnExpAnalytics = document.getElementById('btn-export-analytics');
     if (btnExpAnalytics) {
        btnExpAnalytics.addEventListener('click', () => {
@@ -3826,6 +4230,7 @@ class AppController {
       this.renderDashboard();
       this.renderPatientsList();
       this.updateNotificationBadge();
+      this.startOnlinePolling();
     });
     const canvas = document.getElementById('call-waveform-canvas');
     if (canvas) {
@@ -3849,6 +4254,33 @@ class AppController {
     }
     this.initOpdScreen();
     this.initRoleGate();
+  }
+  startOnlinePolling() {
+    const fetchOnline = async () => {
+      try {
+        const response = await fetch(`${window.CounselFlow.API_BASE}/patients/online`, {
+          headers: {
+            'ngrok-skip-browser-warning': 'true'
+          }
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const oldOnline = this.onlinePatientIds || [];
+          this.onlinePatientIds = data.onlinePatientIds || [];
+          const changed = oldOnline.length !== this.onlinePatientIds.length || 
+                          oldOnline.some(id => !this.onlinePatientIds.includes(id));
+          if (changed) {
+            if (this.activeScreen === 'dashboard') {
+              this.renderPatientsList();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching online patients:', err);
+      }
+    };
+    fetchOnline();
+    setInterval(fetchOnline, 5000);
   }
   bindEventDelegation() {
     const handlePatientRowClick = (e) => {
@@ -4263,9 +4695,21 @@ class AppController {
         this.dom.patientsDetailContainer.style.display = 'none';
       }
     }
+    if (screenId === 'opd') {
+      const activeOpdTab = document.querySelector('.nav-item-opd.active');
+      if (!activeOpdTab) {
+        const firstOpdTab = document.querySelector('.nav-item-opd');
+        if (firstOpdTab) {
+          // Defer click slightly to let switchScreen finish
+          setTimeout(() => firstOpdTab.click(), 0);
+        }
+      }
+    }
     document.querySelectorAll('.nav-item').forEach(el => {
       if (el.getAttribute('data-screen') === screenId) {
-        el.classList.add('active');
+        if (!el.classList.contains('nav-item-opd')) {
+          el.classList.add('active');
+        }
       } else {
         el.classList.remove('active');
       }
@@ -4325,6 +4769,18 @@ class AppController {
         this.dom.pageSubtitleText.innerText = "Manage patient clinical checkpoints and stage transitions inline";
         this.renderClinicalWorkflow();
         break;
+      case 'profiles':
+        this.dom.pageTitleText.innerText = "Profiles Management";
+        this.dom.pageSubtitleText.innerText = "Manage patient and counselor rosters and assignments";
+        this.renderProfilesList();
+        break;
+    }
+  }
+  renderProfilesList() {
+    if (window.CounselFlow && typeof window.CounselFlow.renderProfilesList === 'function') {
+      window.CounselFlow.renderProfilesList();
+    } else {
+      console.error("renderProfilesList is not defined in window.CounselFlow. Make sure profiles.js is loaded.");
     }
   }
   bindThemeToggle() {
@@ -4771,20 +5227,90 @@ class AppController {
     this.renderTimelineList();
     this.renderEscalationPanel();
   }
+  renderProfilesList() {
+    if (window.CounselFlow && typeof window.CounselFlow.renderProfilesList === 'function') {
+      window.CounselFlow.renderProfilesList();
+    } else {
+      console.warn("Profiles rendering function not registered yet.");
+    }
+  }
   renderClinicalWorkflow() {
     const board = document.getElementById('clinical-workflow-board');
+    const statsHeatmap = document.getElementById('workflow-stats-heatmap');
     if (!board) return;
     const activeRole = this.activeRole || window.CounselFlow.getActiveRole() || 'counsellor';
-    const filteredPatients = this.getSecurityScopedPatients();
+    const query = (this.currentWorkflowFilter?.query || '').toLowerCase().trim();
+    const sortMode = this.currentWorkflowFilter?.sort || 'newest';
+    let filteredPatients = this.getSecurityScopedPatients();
+    if (query) {
+      filteredPatients = filteredPatients.filter(p =>
+        (p.name || '').toLowerCase().includes(query) ||
+        (p.id || '').toLowerCase().includes(query)
+      );
+    }
     const detoxPatients = filteredPatients.filter(p => (p.clinicalStage === 1 || p.clinicalStage === 2) && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage3Patients = filteredPatients.filter(p => p.clinicalStage === 3 && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage4Patients = filteredPatients.filter(p => p.clinicalStage === 4 && p.status !== 'Completed' && p.status !== 'LAMA');
     const stage5Patients = filteredPatients.filter(p => p.clinicalStage === 5 && p.status !== 'Completed' && p.status !== 'LAMA');
     const lamaPatients = filteredPatients.filter(p => p.status === 'LAMA' || p.clinicalStage === 0);
+    const sortFn = (a, b) => {
+      const dayA = window.CounselFlow.calculateTreatmentDay(a.admissionDate);
+      const dayB = window.CounselFlow.calculateTreatmentDay(b.admissionDate);
+      if (sortMode === 'newest') return dayA - dayB;
+      if (sortMode === 'overdue') return dayB - dayA;
+      if (sortMode === 'severity') {
+        const sevOrder = { 'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3 };
+        return (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9);
+      }
+      return 0;
+    };
+    detoxPatients.sort(sortFn);
+    stage3Patients.sort(sortFn);
+    stage4Patients.sort(sortFn);
+    stage5Patients.sort(sortFn);
+    lamaPatients.sort((a, b) => window.CounselFlow.calculateTreatmentDay(a.admissionDate) - window.CounselFlow.calculateTreatmentDay(b.admissionDate));
+    if (statsHeatmap) {
+      const colDefs = [
+        { id: 'detox', label: 'Detox & Clearance', patients: detoxPatients, thresholds: [14, 10, 5] },
+        { id: 'family', label: 'Family Activation', patients: stage3Patients, thresholds: [14, 10, 5] },
+        { id: 'bridge', label: '30-Day Bridge', patients: stage4Patients, thresholds: [45, 30] },
+        { id: 'maintenance', label: '90-Day Maintenance', patients: stage5Patients, thresholds: [90] },
+        { id: 'lama', label: 'LAMA Cases', patients: lamaPatients, thresholds: [] },
+      ];
+      statsHeatmap.innerHTML = colDefs.map(col => {
+        if (!col.patients.length) return `<span style="color:var(--text-muted);">${col.label}: 0</span>`;
+        const overdue = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge') return day > 45;
+          if (col.id === 'maintenance') return day >= 90;
+          return day > (col.thresholds[0] || 999);
+        }).length;
+        const dueSoon = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge') return day >= 30 && day <= 45;
+          if (col.id === 'maintenance') return false;
+          const t = col.thresholds;
+          return day >= (t[1] || 0) && day <= (t[0] || 999);
+        }).length;
+        const approaching = col.patients.filter(p => {
+          const day = window.CounselFlow.calculateTreatmentDay(p.admissionDate);
+          if (col.id === 'bridge' || col.id === 'maintenance') return 0;
+          return day >= (col.thresholds[2] || 0) && day < (col.thresholds[1] || 999);
+        }).length;
+        const onTrack = col.patients.length - overdue - dueSoon - approaching;
+        return `<span style="display:flex; gap:6px; align-items:center;">
+          <strong style="color:var(--text-primary);">${col.label}:</strong>
+          <span style="color:var(--accent-green);">${onTrack}</span>
+          ${approaching ? `<span style="color:#facc15;">${approaching}</span>` : ''}
+          ${dueSoon ? `<span style="color:var(--accent-orange);">${dueSoon}</span>` : ''}
+          ${overdue ? `<span style="color:var(--accent-red); font-weight:700;">${overdue} overdue</span>` : ''}
+        </span>`;
+      }).join('');
+    }
     const columns = [
       {
         id: 'detox',
-        title: ' Detox & Clearance',
+        title: 'Detox & Clearance',
         subtitle: 'Stage 1 & 2',
         count: detoxPatients.length,
         patients: detoxPatients,
@@ -4795,24 +5321,24 @@ class AppController {
           const disabledAttr = canEdit ? '' : 'disabled';
           return `
             <div class="workflow-check-list">
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="withdrawalStabilised" ${wChecked} ${disabledAttr}>
                 Withdrawal Stabilised
               </label>
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="layer1And2Ready" ${lChecked} ${disabledAttr}>
                 Layer 1+2 Ready
               </label>
             </div>
             ${(canEdit && pt.checkpoints?.withdrawalStabilised && pt.checkpoints?.layer1And2Ready) ? `
-              <button class="workflow-action-btn primary btn-workflow-promote" data-id="${pt.id}" data-target-stage="3" style="margin-top:8px;">Request MO Clearance</button>
+              <button class="workflow-action-btn primary btn-workflow-promote" data-id="${pt.id}" data-target-stage="3">Request MO Clearance</button>
             ` : ''}
           `;
         }
       },
       {
         id: 'family',
-        title: '‍‍‍ Family Activation',
+        title: 'Family Activation',
         subtitle: 'Stage 3',
         count: stage3Patients.length,
         patients: stage3Patients,
@@ -4820,17 +5346,16 @@ class AppController {
           const fChecked = pt.checkpoints?.familyPsychoedAttended ? 'checked' : '';
           const canEdit = ['spo', 'supervisor', 'ddrc'].includes(activeRole);
           const disabledAttr = canEdit ? '' : 'disabled';
-          // Gap 5: Family Anchor Unavailable logic
           const anchorStatus = pt.familyAnchorStatus || 'pending';
           let anchorHtml = '';
           if (anchorStatus === 'unavailable') {
-             anchorHtml = `<div style="font-size:10px; color:var(--accent-orange); margin-top:4px; font-weight:bold;">⚠️ No Family Anchor. Reference card issued.</div>`;
+             anchorHtml = `<div class="workflow-no-family-warning">No Family Anchor. Reference card issued.</div>`;
           } else if (canEdit && !pt.checkpoints?.familyPsychoedAttended) {
              anchorHtml = `<button class="workflow-action-btn secondary btn-workflow-no-family" data-id="${pt.id}" style="margin-top:4px; font-size:10px; border-color:var(--accent-orange); color:var(--accent-orange);">Mark No Family Anchor</button>`;
           }
           return `
             <div class="workflow-check-list">
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'};">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="familyPsychoedAttended" ${fChecked} ${disabledAttr}>
                 Family Psychoed Attended
               </label>
@@ -4844,7 +5369,7 @@ class AppController {
       },
       {
         id: 'bridge',
-        title: ' 30-Day Bridge',
+        title: '30-Day Bridge',
         subtitle: 'Stage 4',
         count: stage4Patients.length,
         patients: stage4Patients,
@@ -4853,16 +5378,14 @@ class AppController {
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
           const canFail = ['spo', 'supervisor', 'ddrc'].includes(activeRole);
           const disabledAttr = canEdit ? '' : 'disabled';
-          // Gap 1: Stage 4 Contact Frequency Tracker
           const contactsThisWeek = window.CounselFlow.getStage4ContactsThisWeek ? window.CounselFlow.getStage4ContactsThisWeek(pt) : 0;
-          const contactAlert = contactsThisWeek < 3 ? `<div style="font-size:10px; color:var(--accent-red); margin-top:4px; font-weight:bold;">⚠️ Contacts this week: ${contactsThisWeek}/3 (L1 Alert)</div>` : `<div style="font-size:10px; color:var(--accent-teal); margin-top:4px;">Contacts this week: ${contactsThisWeek}/3</div>`;
-          // Gap 6: NGO Partner Field
-          const ngoHtml = pt.ngoPartner ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">NGO: ${escapeHtml(pt.ngoPartner)}</div>` : `<div style="font-size:10px; color:var(--accent-orange); margin-top:2px;">⚠️ No NGO Partner Assigned</div>`;
+          const contactAlert = contactsThisWeek < 3 ? `<div style="font-size:10px; color:var(--accent-red); margin-top:4px; font-weight:bold;">Contacts this week: ${contactsThisWeek}/3 (L1 Alert)</div>` : `<div style="font-size:10px; color:var(--accent-teal); margin-top:4px;">Contacts this week: ${contactsThisWeek}/3</div>`;
+          const ngoHtml = pt.ngoPartner ? `<div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">NGO: ${escapeHtml(pt.ngoPartner)}</div>` : `<div style="font-size:10px; color:var(--accent-orange); margin-top:2px;">No NGO Partner Assigned</div>`;
           return `
             <div class="workflow-check-list">
               ${contactAlert}
               ${ngoHtml}
-              <label class="workflow-check-item" style="opacity: ${canEdit ? '1' : '0.5'}; margin-top:8px;">
+              <label class="workflow-check-item${canEdit ? '' : ' workflow-read-only'}" style="margin-top:8px;">
                 <input type="checkbox" class="chk-workflow-checkpoint" data-id="${pt.id}" data-field="day30ReviewPassed" ${bChecked} ${disabledAttr}>
                 30-Day Review Passed
               </label>
@@ -4878,27 +5401,25 @@ class AppController {
       },
       {
         id: 'maintenance',
-        title: ' 90-Day Maintenance',
+        title: '90-Day Maintenance',
         subtitle: 'Stage 5',
         count: stage5Patients.length,
         patients: stage5Patients,
         renderChecklist: (pt) => {
           const day = window.CounselFlow.calculateTreatmentDay(pt.admissionDate);
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
-          // Gap 10: Step-down cadence indicator
-          // Gap 3: Dual sign-off buttons
           const counselorSigned = pt.stage6SignoffCounsellor ? '✅' : '❌';
           const supervisorSigned = pt.stage6SignoffSupervisor ? '✅' : '❌';
           return `
-            <div style="font-size:11px; color:var(--text-muted); background:var(--bg-card); padding:8px; border-radius:8px; border:1px solid var(--border-light); margin-bottom:8px;">
+            <div class="workflow-maintenance-status">
               Day ${day} on maintenance. Ready for closeout at Day 90.
               <div style="margin-top:4px; font-weight:bold; color:var(--accent-blue);">📉 Reduced Cadence: Weekly Calls</div>
             </div>
             ${(canEdit && day >= 90) ? `
               <div style="font-size:10px; margin-bottom:4px; color:var(--text-secondary);">Final Review Sign-offs:</div>
-              <div style="display:flex; gap:4px; margin-bottom:8px;">
-                <button class="workflow-action-btn secondary btn-workflow-signoff-counsellor" data-id="${pt.id}" style="font-size:9px; padding:4px;" ${pt.stage6SignoffCounsellor ? 'disabled' : ''}>Counsellor ${counselorSigned}</button>
-                <button class="workflow-action-btn secondary btn-workflow-signoff-supervisor" data-id="${pt.id}" style="font-size:9px; padding:4px;" ${pt.stage6SignoffSupervisor ? 'disabled' : ''}>Supervisor ${supervisorSigned}</button>
+              <div class="workflow-signoff-buttons">
+                <button class="workflow-action-btn secondary btn-workflow-signoff-counsellor workflow-signoff-btn" data-id="${pt.id}" ${pt.stage6SignoffCounsellor ? 'disabled' : ''}>Counsellor ${counselorSigned}</button>
+                <button class="workflow-action-btn secondary btn-workflow-signoff-supervisor workflow-signoff-btn" data-id="${pt.id}" ${pt.stage6SignoffSupervisor ? 'disabled' : ''}>Supervisor ${supervisorSigned}</button>
               </div>
             ` : ''}
           `;
@@ -4906,18 +5427,18 @@ class AppController {
       },
       {
         id: 'lama',
-        title: ' LAMA Cases',
+        title: 'LAMA Cases',
         subtitle: 'Stage 0 Discharge',
         count: lamaPatients.length,
         patients: lamaPatients,
         renderChecklist: (pt) => {
           const canEdit = ['spo', 'supervisor', 'ddrc', 'counsellor'].includes(activeRole);
           return `
-            <div style="font-size:11px; color:var(--accent-red); background:rgba(220,38,38,0.05); padding:8px; border-radius:8px; border:1px solid rgba(220,38,38,0.2); margin-bottom:8px;">
+            <div class="workflow-maintenance-status" style="color:var(--accent-red); background:rgba(220,38,38,0.05); border-color:rgba(220,38,38,0.2);">
               Left Against Medical Advice. Monitor safety-net protocols.
             </div>
             ${canEdit ? `
-            <button class="workflow-action-btn secondary btn-workflow-re-enroll" data-id="${pt.id}" style="border-color:var(--accent-blue); color:var(--accent-blue); background:rgba(0,242,254,0.05);">Re-Enroll Patient</button>
+            <button class="workflow-action-btn secondary btn-workflow-re-enroll workflow-re-enroll-btn" data-id="${pt.id}">Re-Enroll Patient</button>
             ` : ''}
           `;
         }
@@ -4930,8 +5451,8 @@ class AppController {
             <div class="workflow-column-title">${col.title}</div>
             <div class="workflow-column-count">${col.count}</div>
           </div>
-          <div style="font-size:10px; color:var(--text-muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:0.02em;">${col.subtitle}</div>
-          <div class="workflow-cards-container" style="display:flex; flex-direction:column; gap:12px;">
+          <div class="workflow-column-subtitle">${col.subtitle}</div>
+          <div class="workflow-cards-container">
             ${col.patients.length > 0 ? col.patients.map(pt => {
               const day = window.CounselFlow.calculateTreatmentDay(pt.admissionDate);
               let urgencyColor = 'var(--accent-green)';
@@ -4954,7 +5475,7 @@ class AppController {
                 <div class="workflow-card" data-id="${escapedId}" style="border-left: 3px solid ${urgencyColor};">
                   <div class="workflow-card-header">
                     <div class="workflow-card-info">
-                      <h4 class="workflow-card-nav" style="cursor:pointer; text-decoration:underline;">${escapedName}</h4>
+                       <h4 class="workflow-card-nav">${escapedName}</h4>
                       <span>ID: ${escapedId}</span>
                     </div>
                     <span class="workflow-card-badge" style="background:${urgencyColor}22; color:${urgencyColor};">${urgencyText}</span>
@@ -5116,8 +5637,8 @@ class AppController {
     board.querySelectorAll('.btn-workflow-signoff-counsellor').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         const id = e.target.getAttribute('data-id');
-        if (!['counsellor', 'spo', 'supervisor'].includes(activeRole)) {
-          this.showToast('Access Denied', 'Only the Tele-Counsellor can provide counsellor sign-off.', 'error');
+        if (!['counsellor', 'spo', 'supervisor', 'ddrc'].includes(activeRole)) {
+          this.showToast('Access Denied', 'Only the Tele-Counsellor or DDRC Clinical can provide counsellor sign-off.', 'error');
           return;
         }
         const pt = this.patients.find(p => p.id === id);
@@ -5158,9 +5679,10 @@ class AppController {
         }
       });
     });
-    board.querySelectorAll('.workflow-card-nav').forEach(nav => {
+    board.querySelectorAll('.workflow-card').forEach(card => {
+      const nav = card.querySelector('.workflow-card-nav');
+      if (!nav) return;
       nav.addEventListener('click', async (e) => {
-        const card = e.target.closest('.workflow-card');
         const id = card.getAttribute('data-id');
         await this.switchScreen('patients');
         const pt = this.patients.find(p => p.id === id);
@@ -5169,6 +5691,26 @@ class AppController {
         }
       });
     });
+  }
+  bindWorkflowSearchAndSort() {
+    const searchInput = document.getElementById('workflow-search-input');
+    const sortSelect = document.getElementById('workflow-sort-select');
+    if (!searchInput || !sortSelect) return;
+    this.dom.workflowSearchInput = searchInput;
+    this.dom.workflowSortSelect = sortSelect;
+    this.dom.workflowStatsHeatmap = document.getElementById('workflow-stats-heatmap');
+    const savedQuery = this.currentWorkflowFilter?.query || '';
+    searchInput.value = savedQuery;
+    sortSelect.value = this.currentWorkflowFilter?.sort || 'newest';
+    const handler = debounce(() => {
+      this.currentWorkflowFilter = {
+        query: searchInput.value,
+        sort: sortSelect.value,
+      };
+      this.renderClinicalWorkflow();
+    }, 200);
+    searchInput.addEventListener('input', handler);
+    sortSelect.addEventListener('change', handler);
   }
   renderMissedCallsPanel() {
     const missedCallsContainer = document.getElementById('missed-calls-panel-container');
@@ -5527,6 +6069,7 @@ class AppController {
     if (escapedStatus.toLowerCase() === 'lama') statusMarker = '';
     const isLama = escapedStatus.toLowerCase() === 'lama';
     const rowBorderStyle = isLama ? 'border-left: 3px solid var(--accent-red); background: rgba(220,38,38,0.04);' : '';
+    const isOnline = this.onlinePatientIds && this.onlinePatientIds.includes(escapedId);
     return `
       <div class="patient-row" style="justify-content: flex-start; ${rowBorderStyle}" role="row" data-patient-id="${escapedId}" tabindex="0" aria-label="Patient ${escapedName}, ID ${escapedId}">
         ${!isOverview ? `
@@ -5535,8 +6078,9 @@ class AppController {
         </div>
         ` : ''}
         <div class="patient-meta" role="cell" style="flex: 1;">
-          <div class="patient-avatar" style="background: ${pt.avatarColor || 'var(--accent-blue)'};">
+          <div class="patient-avatar" style="background: ${pt.avatarColor || 'var(--accent-blue)'}; position: relative;">
             ${escapedName.split(' ').map(n => n[0]).join('')}
+            ${isOnline ? `<span style="position: absolute; bottom: -2px; right: -2px; width: 10px; height: 10px; background-color: var(--accent-green); border: 2px solid var(--bg-card); border-radius: 50%; box-shadow: 0 0 6px var(--accent-green);"></span>` : ''}
           </div>
           <div class="patient-details">
             <h4 style="font-size: ${isOverview ? '14px' : '15px'}">${escapedName}</h4>
@@ -5569,7 +6113,18 @@ class AppController {
       </div>
     `;
   }
+  openPatientForm() {
+    const overlay = document.getElementById('modal-add-patient');
+    if (overlay) {
+      document.querySelector('#modal-add-patient h3').innerText = "Create Patient Profile";
+      document.querySelector('#modal-add-patient button[type="submit"]').innerText = "Save Profile";
+      document.getElementById('form-add-patient').reset();
+      delete document.getElementById('form-add-patient').dataset.editId;
+      overlay.classList.add('active');
+    }
+  }
   openPatientDetail(patient) {
+    this.switchScreen('patients');
     this.selectedPatient = patient;
     this.dom.patientsListContainer.style.display = 'none';
     this.dom.patientsDetailContainer.style.display = 'block';
@@ -5876,6 +6431,229 @@ class AppController {
       }
       this.initiateCallSequence(this.selectedPatient);
     };
+    // Bind EMR tab switching
+    const tabBtns = document.querySelectorAll('.emr-tab-btn');
+    const tabPanes = document.querySelectorAll('.emr-tab-pane');
+    tabBtns.forEach(btn => {
+      btn.onclick = () => {
+        tabBtns.forEach(b => b.classList.remove('active'));
+        tabPanes.forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const target = btn.getAttribute('data-target');
+        const pane = document.getElementById(target);
+        if (pane) pane.classList.add('active');
+      };
+    });
+    // Bind add EMR record buttons
+    const addEmrBtns = document.querySelectorAll('.btn-add-emr-record');
+    addEmrBtns.forEach(btn => {
+      btn.onclick = () => {
+        const type = btn.getAttribute('data-type');
+        this.openEmrRecordModal(type, patient);
+      };
+    });
+    this.renderEmrTables(patient);
+  }
+  renderEmrTables(patient) {
+    const renderTable = (tbodyId, dataArray, renderRowStr) => {
+      const tbody = document.getElementById(tbodyId);
+      if (!tbody) return;
+      if (!dataArray || dataArray.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:20px; color:var(--text-muted);">No records found</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = dataArray.map(renderRowStr).join('');
+    };
+    renderTable('tbody-emr-vitals', patient.vitals, (v) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${v.date}</td>
+        <td style="padding: 12px;">${v.bloodPressure}</td>
+        <td style="padding: 12px;">${v.heartRate}</td>
+        <td style="padding: 12px;">${v.temperature}</td>
+        <td style="padding: 12px;">${v.weight}</td>
+      </tr>
+    `);
+    renderTable('tbody-emr-medical-history', patient.medicalHistory, (m) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${m.condition}</td>
+        <td style="padding: 12px;">${m.date}</td>
+        <td style="padding: 12px;">${m.status}</td>
+      </tr>
+    `);
+    renderTable('tbody-emr-family-history', patient.familyHistory, (f) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${f.relation}</td>
+        <td style="padding: 12px;">${f.condition}</td>
+        <td style="padding: 12px;">${f.date || 'N/A'}</td>
+      </tr>
+    `);
+    renderTable('tbody-emr-cows', patient.cowsAssessment, (c) => `
+      <tr style="border-bottom: 1px solid var(--border-light);">
+        <td style="padding: 12px;">${c.date}</td>
+        <td style="padding: 12px; font-weight: bold; color: ${c.totalScore > 10 ? 'var(--accent-red)' : 'var(--text-primary)'}">${c.totalScore}</td>
+        <td style="padding: 12px;">${c.severity}</td>
+        <td style="padding: 12px;">${c.recordedBy || 'System'}</td>
+      </tr>
+    `);
+  }
+  openEmrRecordModal(type, patient) {
+    const overlay = document.getElementById('modal-emr-record');
+    const form = document.getElementById('form-emr-record');
+    const typeInput = document.getElementById('emr-record-type');
+    const dateEl = document.getElementById('emr-record-date');
+    const titleEl = document.getElementById('emr-modal-title');
+    const subtitleEl = document.getElementById('emr-modal-subtitle');
+    const iconContainer = document.getElementById('emr-modal-icon');
+    if (!overlay || !form) return;
+    // Reset all field groups
+    document.querySelectorAll('.emr-field-group').forEach(g => g.style.display = 'none');
+    form.reset();
+    typeInput.value = type;
+    dateEl.textContent = new Date().toISOString().split('T')[0];
+    // Configure modal based on type
+    const configs = {
+      vitals: {
+        title: 'Add Vitals Record',
+        subtitle: 'Record patient vital signs',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+        iconBg: 'rgba(238, 93, 80, 0.1)',
+        iconColor: 'var(--accent-red)'
+      },
+      medicalHistory: {
+        title: 'Add Medical History',
+        subtitle: 'Record a medical condition or diagnosis',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>',
+        iconBg: 'rgba(79, 172, 254, 0.1)',
+        iconColor: 'var(--accent-blue)'
+      },
+      familyHistory: {
+        title: 'Add Family History',
+        subtitle: 'Record hereditary or family medical history',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        iconBg: 'rgba(139, 92, 246, 0.1)',
+        iconColor: 'var(--accent-purple)'
+      },
+      cowsAssessment: {
+        title: 'Add COWS Assessment',
+        subtitle: 'Clinical Opiate Withdrawal Scale evaluation',
+        icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+        iconBg: 'rgba(255, 152, 0, 0.1)',
+        iconColor: 'var(--accent-orange)'
+      }
+    };
+    const config = configs[type];
+    if (!config) return;
+    titleEl.textContent = config.title;
+    subtitleEl.textContent = config.subtitle;
+    iconContainer.innerHTML = config.icon;
+    iconContainer.style.background = config.iconBg;
+    iconContainer.style.color = config.iconColor;
+    // Show the correct field group
+    const fieldGroup = document.getElementById(`emr-fields-${type}`);
+    if (fieldGroup) fieldGroup.style.display = 'block';
+    // Toggle required on visible inputs only
+    document.querySelectorAll('.emr-field-group input[required], .emr-field-group select[required]').forEach(el => {
+      el.required = false;
+    });
+    if (fieldGroup) {
+      fieldGroup.querySelectorAll('input[type="text"], input[type="number"]').forEach(el => {
+        if (el.id !== 'emr-cows-severity') el.required = true;
+      });
+    }
+    // Open modal
+    overlay.classList.add('active');
+    // Focus first input after animation
+    setTimeout(() => {
+      const firstInput = fieldGroup?.querySelector('input:not([readonly]), select, textarea');
+      if (firstInput) firstInput.focus();
+    }, 150);
+    // Bind form submission (remove old listener by cloning)
+    const newForm = form.cloneNode(true);
+    form.parentNode.replaceChild(newForm, form);
+    // Re-bind COWS auto-severity after clone
+    const cowsScoreInput = document.getElementById('emr-cows-score');
+    const cowsSeverityInput = document.getElementById('emr-cows-severity');
+    if (cowsScoreInput && cowsSeverityInput) {
+      cowsScoreInput.addEventListener('input', () => {
+        const score = parseInt(cowsScoreInput.value, 10);
+        if (isNaN(score)) { cowsSeverityInput.value = '—'; return; }
+        if (score <= 4) cowsSeverityInput.value = 'No Withdrawal';
+        else if (score <= 12) cowsSeverityInput.value = 'Mild';
+        else if (score <= 24) cowsSeverityInput.value = 'Moderate';
+        else if (score <= 36) cowsSeverityInput.value = 'Moderately Severe';
+        else cowsSeverityInput.value = 'Severe';
+      });
+    }
+    // Bind close / cancel
+    const closeEmrModal = () => {
+      document.getElementById('modal-emr-record').classList.remove('active');
+    };
+    document.getElementById('btn-close-emr-modal')?.addEventListener('click', closeEmrModal);
+    document.getElementById('btn-cancel-emr-form')?.addEventListener('click', closeEmrModal);
+    newForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const activeRole = this.activeRole || window.CounselFlow.getActiveRole() || 'counsellor';
+      const entry = { date: new Date().toISOString().split('T')[0], recordedBy: activeRole };
+      const currentType = document.getElementById('emr-record-type').value;
+      if (currentType === 'vitals') {
+        entry.bloodPressure = document.getElementById('emr-vitals-bp').value || '120/80';
+        entry.heartRate = parseInt(document.getElementById('emr-vitals-hr').value, 10) || 0;
+        entry.temperature = parseFloat(document.getElementById('emr-vitals-temp').value) || 0;
+        entry.weight = parseFloat(document.getElementById('emr-vitals-weight').value) || 0;
+      } else if (currentType === 'medicalHistory') {
+        entry.condition = document.getElementById('emr-med-condition').value || 'Unknown';
+        entry.status = document.getElementById('emr-med-status').value || 'Active';
+      } else if (currentType === 'familyHistory') {
+        entry.relation = document.getElementById('emr-family-relation').value || 'N/A';
+        entry.condition = document.getElementById('emr-family-condition').value || 'Unknown';
+        entry.notes = document.getElementById('emr-family-notes').value || '';
+      } else if (currentType === 'cowsAssessment') {
+        const score = parseInt(document.getElementById('emr-cows-score').value, 10);
+        if (isNaN(score)) {
+          this.showToast('Invalid Input', 'COWS score must be a valid number.', 'error');
+          return;
+        }
+        entry.totalScore = score;
+        if (score <= 4) entry.severity = 'No Withdrawal';
+        else if (score <= 12) entry.severity = 'Mild';
+        else if (score <= 24) entry.severity = 'Moderate';
+        else if (score <= 36) entry.severity = 'Moderately Severe';
+        else entry.severity = 'Severe';
+      } else {
+        return;
+      }
+      // Disable submit button
+      const submitBtn = document.getElementById('btn-submit-emr-form');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;"></div> Saving...';
+      }
+      try {
+        const API_URL = window.CounselFlow.API_BASE || 'http://localhost:5001/api';
+        const res = await fetch(`${API_URL}/patients/${patient.id}/records/${currentType}`, {
+          method: 'PUT',
+          headers: window.CounselFlow.getAuthHeaders ? window.CounselFlow.getAuthHeaders() : { 'Content-Type': 'application/json' },
+          body: JSON.stringify(entry)
+        });
+        if (res.ok) {
+          closeEmrModal();
+          this.showToast('Record Added', 'New EMR record added successfully.', 'success');
+          await this.refreshData();
+          const updatedPatient = this.patients.find(p => p.id === patient.id);
+          if (updatedPatient) this.openPatientDetail(updatedPatient);
+        } else {
+          this.showToast('Error', 'Failed to add EMR record. Server returned an error.', 'error');
+        }
+      } catch(err) {
+        console.error('EMR save error:', err);
+        this.showToast('Error', 'Could not connect to server. Please try again.', 'error');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg> Save Record';
+        }
+      }
+    });
   }
   async savePatientNotes() {
     if (!this.selectedPatient) return;
@@ -6722,6 +7500,32 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     this.showToast("Record Committed", `Session ${newSessionLog.sessionId} saved under ${this.selectedPatient.name}.`, "success");
     this.openPatientDetail(this.selectedPatient);
   }
+  viewTranscriptModal(logId, transcriptText) {
+    const modalDiv = document.createElement('div');
+    modalDiv.className = 'modal-overlay active';
+    modalDiv.id = 'modal-transcript-detail';
+    modalDiv.style.cssText = 'position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); display:flex; justify-content:center; align-items:center; z-index:9999;';
+    modalDiv.innerHTML = `
+      <div class="modal-content" style="width: 600px; max-width: 95%; background: var(--bg-card, #fff); padding: 24px; border-radius: 16px; border: 1px solid var(--border-light); box-shadow: 0 8px 32px rgba(0,0,0,0.3); display:flex; flex-direction:column; max-height:85%;">
+        <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border-light); padding-bottom:12px; margin-bottom:16px;">
+          <h3 style="margin:0; color:var(--text-primary);">Recording Transcript (Log: ${escapeHtml(logId)})</h3>
+          <button class="modal-close" id="btn-close-transcript-modal" style="background:none; border:none; color:var(--text-primary); font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+        <div class="modal-body" style="overflow-y:auto; flex-grow:1; font-size:14px; line-height:1.6; color:var(--text-secondary); max-height:400px; background:var(--bg-input); padding:16px; border-radius:8px; white-space:pre-wrap;">${escapeHtml(transcriptText || 'No transcript generated yet.')}</div>
+        <div class="modal-footer" style="border-top: 1px solid var(--border-light); padding-top:16px; margin-top:16px; display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn-secondary" id="btn-copy-transcript" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Copy Transcript</button>
+          <button class="btn-primary" id="btn-close-transcript-modal-footer" style="font-size:12px; padding:6px 16px; border-radius:8px; cursor:pointer;">Close</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modalDiv);
+    modalDiv.querySelector('#btn-close-transcript-modal').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-close-transcript-modal-footer').addEventListener('click', () => modalDiv.remove());
+    modalDiv.querySelector('#btn-copy-transcript').addEventListener('click', () => {
+      navigator.clipboard.writeText(transcriptText);
+      this.showToast('Copied', 'Transcript copied to clipboard.', 'success');
+    });
+  }
   viewSessionDetailModal(patientId, sessionId) {
     const pt = this.patients.find(p => p.id === patientId);
     if (!pt) return;
@@ -6943,6 +7747,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                 <th style="padding:10px 12px; text-align:center;">Duration</th>
                 <th style="padding:10px 12px; text-align:center;">Direction</th>
                 <th style="padding:10px 12px; text-align:center;">Disposition</th>
+                <th style="padding:10px 12px; text-align:center;">Recording / Action</th>
               </tr>
             </thead>
             <tbody>
@@ -6962,6 +7767,14 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
                   <td style="padding:10px 12px; text-align:center; font-family:monospace; color:var(--text-primary);">${escapeHtml(log.duration || '—')}</td>
                   <td style="padding:10px 12px; text-align:center;">${directionBadge(log.direction)}</td>
                   <td style="padding:10px 12px; text-align:center;">${dispositionBadge(log.disposition)}</td>
+                  <td style="padding:10px 12px; text-align:center;">
+                    ${log.recordingUrl ? `
+                      <div style="display:flex; flex-direction:column; align-items:center; gap:6px; min-width: 160px; margin: 4px 0;">
+                        <audio src="${escapeHtml(log.recordingUrl)}" controls style="height:28px; width:150px; outline:none;"></audio>
+                        <button class="btn-primary transcribe-rec-btn" data-logid="${escapeHtml(log.logId || '')}" data-url="${escapeHtml(log.recordingUrl)}" style="font-size:10px; padding:3px 8px; border-radius:4px; cursor:pointer;">Transcribe Recording</button>
+                      </div>
+                    ` : '<span style="color:var(--text-muted); font-style:italic;">No recording</span>'}
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -7012,6 +7825,39 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
           }
         });
       }
+      document.querySelectorAll('.transcribe-rec-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const logId = btn.getAttribute('data-logid');
+          const recordingUrl = btn.getAttribute('data-url');
+          btn.disabled = true;
+          const originalText = btn.textContent;
+          btn.textContent = 'Transcribing...';
+          try {
+            const token = localStorage.getItem('counseling_token') || '';
+            const resp = await fetch('/api/recordings/transcribe', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': token ? `Bearer ${token}` : ''
+              },
+              body: JSON.stringify({ logId, recordingUrl })
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              this.viewTranscriptModal(logId, data.text);
+            } else {
+              const err = await resp.json();
+              this.showToast('ASR Error', err.error || 'Failed to transcribe call recording.', 'error');
+            }
+          } catch (err) {
+            console.error('Transcription error:', err);
+            this.showToast('Connection Error', 'Failed to communicate with transcription service.', 'error');
+          } finally {
+            btn.disabled = false;
+            btn.textContent = originalText;
+          }
+        });
+      });
       return;
     }
     let allSessions = [];
@@ -7169,11 +8015,6 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     });
     this.dom.settingsTabPanel.addEventListener('click', (e) => {
       if (e.target.matches('.btn-primary') && e.target.textContent.includes('Save')) {
-        const groqInput = document.getElementById('settings-text-groq-key');
-        if (groqInput) {
-          window.CounselFlow.CONFIG.GROQ_API_KEY = groqInput.value;
-          window.localStorage.setItem('counseling_groq_api_key', groqInput.value);
-        }
         const cRetention = document.getElementById('setting-counselor-retention');
         const aRetention = document.getElementById('setting-admin-retention');
         if (cRetention && aRetention) {
@@ -7207,10 +8048,6 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
             <option value="llama-counsel">Llama-3-Counselor-8B (Fine-tuned for clinical addiction terms)</option>
             <option value="gpt-4o">OpenAI GPT-4o API Node</option>
           </select>
-        </div>
-        <div class="form-group">
-          <label for="settings-text-groq-key">Groq API Key</label>
-          <input type="password" id="settings-text-groq-key" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-light); background: var(--bg-input); color: var(--text-primary);" value="${escapeHtml(window.CounselFlow.CONFIG.GROQ_API_KEY || '')}" placeholder="Enter your Groq API Key">
         </div>
         <div class="form-group">
           <span style="display:block; font-size:12px; color:var(--text-secondary); margin-bottom:8px; font-weight:600;">System Diagnostic Status</span>
@@ -7414,6 +8251,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
       window.CounselFlow.safeSetItem('counseling_active_role', '');
       window.CounselFlow.safeSetItem('counseling_logged_in_name', '');
       window.CounselFlow.safeSetItem('counseling_logged_in_staff', '');
+      window.localStorage.removeItem('counseling_logged_in_token');
       window.location.reload();
     });
   }
@@ -7468,6 +8306,15 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
             </div>
             <h1 style="font-size:28px; font-weight:800; color:var(--text-primary); margin-bottom:4px; letter-spacing:-0.5px;">CounselFlow</h1>
             <p style="font-size:12px; color:var(--text-secondary); letter-spacing:0.5px;">Tele-Counseling Platform • Community Bridge Model</p>
+          </div>
+          <!-- Government Banner -->
+          <div class="government-banner" style="display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 12px; margin-bottom: 20px; background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px solid var(--border-light); text-align: center;">
+            <img src="logo.png" alt="S. Bhagwant Singh Mann, Chief Minister of Punjab" style="width: 90px; height: 90px; border-radius: 8px; border: 1.5px solid var(--accent-orange); object-fit: cover; object-position: top; box-shadow: 0 4px 8px rgba(0,0,0,0.15);">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 12px; font-weight: 800; color: var(--text-primary);">S. Bhagwant Singh Mann</span>
+              <span style="font-size: 9.5px; color: var(--accent-orange); font-weight: 600;">Hon'ble Chief Minister, Punjab</span>
+              <span style="font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.3px; font-weight: 600;">Drug-Free Punjab Campaign</span>
+            </div>
           </div>
           <!-- Login Form Card -->
           <div class="login-card">
@@ -7767,23 +8614,56 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
     const handleLogin = () => {
       const username = userInput ? userInput.value : '';
       const password = passInput ? passInput.value : '';
-      const result = window.CounselFlow.validateDemoLogin(username, password);
-      if (result) {
+      // Attempt server authentication first
+      fetch(`${window.CounselFlow.API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ username, password })
+      })
+      .then(async res => {
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Invalid username or password');
+        }
+        return res.json();
+      })
+      .then(data => {
         overlay.style.transition = 'opacity 0.4s';
         overlay.style.opacity = '0';
         setTimeout(() => {
           overlay.remove();
-          window.CounselFlow.safeSetItem('counseling_logged_in_name', result.name);
-          window.CounselFlow.safeSetItem('counseling_logged_in_staff', result.staffId);
-          this.applyRole(result.roleKey, true, result.name);
+          window.localStorage.setItem('counseling_logged_in_token', data.token);
+          window.CounselFlow.safeSetItem('counseling_logged_in_name', data.user.name);
+          window.CounselFlow.safeSetItem('counseling_logged_in_staff', data.user.staffId);
+          this.applyRole(data.user.roleKey, true, data.user.name);
         }, 400);
-      } else {
-        if (errMsg) errMsg.style.display = 'block';
-        if (submitBtn) {
-          submitBtn.style.animation = 'shake 0.4s';
-          setTimeout(() => { submitBtn.style.animation = ''; }, 500);
+      })
+      .catch(err => {
+        console.warn('[AUTH] Server login failed, checking fallback offline mode:', err.message);
+        // Fallback to offline mock validation if credentials match demo database
+        const result = window.CounselFlow.validateDemoLogin(username, password);
+        if (result) {
+          overlay.style.transition = 'opacity 0.4s';
+          overlay.style.opacity = '0';
+          setTimeout(() => {
+            overlay.remove();
+            window.CounselFlow.safeSetItem('counseling_logged_in_name', result.name);
+            window.CounselFlow.safeSetItem('counseling_logged_in_staff', result.staffId);
+            this.applyRole(result.roleKey, true, result.name);
+          }, 400);
+        } else {
+          if (errMsg) {
+            errMsg.innerText = err.message || 'Invalid username or password. Please try again.';
+            errMsg.style.display = 'block';
+          }
+          if (submitBtn) {
+            submitBtn.style.animation = 'shake 0.4s';
+            setTimeout(() => { submitBtn.style.animation = ''; }, 500);
+          }
         }
-      }
+      });
     };
     if (submitBtn) submitBtn.addEventListener('click', handleLogin);
     [userInput, passInput].forEach(inp => {
@@ -7830,6 +8710,7 @@ document.getElementById('btn-summary-export').addEventListener('click', () => {
           window.CounselFlow.safeSetItem('counseling_active_role', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_name', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_staff', '');
+          window.localStorage.removeItem('counseling_logged_in_token');
           window.location.reload();
         }
       });

@@ -10,6 +10,10 @@
   <!-- Include SheetJS for Excel parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <link rel="stylesheet" href="css/styles.bundle.css">
+  <style>
+    .vad-indicator { transition: all 0.2s ease; }
+    .vad-indicator.speaking { background: rgba(0, 242, 254, 0.15) !important; color: var(--accent-blue); font-weight: 600; border-color: rgba(0, 242, 254, 0.4) !important; }
+  </style>
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -41,12 +45,12 @@
         </div>
       </div>
 
-      <div class="government-banner" style="display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 20px 16px; margin: 0 8px 24px 8px; background: rgba(255, 255, 255, 0.02); border-radius: 12px; border: 1px solid var(--border-light); text-align: center;">
-        <img src="logo.png" alt="S. Bhagwant Singh Mann, Chief Minister of Punjab" style="width: 150px; height: 150px; border-radius: 10px; border: 2px solid var(--accent-orange); object-fit: cover; object-position: top; box-shadow: 0 6px 12px rgba(0,0,0,0.15);">
-        <div style="display: flex; flex-direction: column; gap: 4px;">
-          <span style="font-size: 13px; font-weight: 800; color: var(--text-primary);">S. Bhagwant Singh Mann</span>
-          <span style="font-size: 10.5px; color: var(--accent-orange); font-weight: 600;">Hon'ble Chief Minister, Punjab</span>
-          <span style="font-size: 9.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; font-weight: 600;">Drug-Free Punjab Campaign</span>
+      <div class="government-banner" style="display: flex; align-items: center; gap: 10px; padding: 12px; margin: 0 16px 16px 16px; background: rgba(255, 255, 255, 0.03); border-radius: 8px; border: 1px solid var(--border-light);">
+        <img src="assets/punjab_cm.png" alt="S. Bhagwant Singh Mann, Chief Minister of Punjab" style="width: 42px; height: 42px; border-radius: 50%; border: 1.5px solid var(--accent-orange); object-fit: cover; object-position: top;">
+        <div style="display: flex; flex-direction: column;">
+          <span style="font-size: 11px; font-weight: 700; color: var(--text-primary);">S. Bhagwant Singh Mann</span>
+          <span style="font-size: 9px; color: var(--text-muted);">Hon'ble Chief Minister, Punjab</span>
+          <span style="font-size: 8px; color: var(--accent-orange); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 2px; font-weight: 600;">Drug-Free Punjab Campaign</span>
         </div>
       </div>
       
@@ -83,6 +87,28 @@
           <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><line x1="20" y1="8" x2="20" y2="14"></line><line x1="23" y1="11" x2="17" y2="11"></line></svg>
           Profiles Management
         </div>
+        
+        <!-- OPD Items -->
+        <div class="nav-item nav-item-opd" data-screen="opd" data-tab="queue" tabindex="0" role="menuitem">
+          <svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+          Patient Queue
+        </div>
+        <div class="nav-item nav-item-opd" data-screen="opd" data-tab="all-patients" tabindex="0" role="menuitem">
+          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+          All Patients
+        </div>
+        <div class="nav-item nav-item-opd" data-screen="opd" data-tab="dispense" tabindex="0" role="menuitem">
+          <svg viewBox="0 0 24 24"><path d="M10.5 20.5 3 13l7.5-7.5"></path><path d="M13.5 3.5 21 11l-7.5 7.5"></path></svg>
+          Dispense Medicine
+        </div>
+        <div class="nav-item nav-item-opd" data-screen="opd" data-tab="inventory" tabindex="0" role="menuitem">
+          <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line></svg>
+          Inventory
+        </div>
+        <div class="nav-item nav-item-opd" data-screen="opd" data-tab="upload" tabindex="0" role="menuitem">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+          Bulk Upload
+        </div>
       </nav>
       
       <div class="sidebar-footer">
@@ -117,7 +143,7 @@
             <div class="badge" id="notification-badge-count" aria-live="polite">2</div>
           </button>
           
-          <button class="btn-primary" id="btn-quick-call" style="display: none;">
+          <button class="btn-primary" id="btn-quick-call" style="display: none !important;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
             Start Session
           </button>
@@ -310,40 +336,108 @@
             ← Back to Patient List
           </button>
           
-          <div class="patient-details-grid">
-            <!-- Left Info Block -->
-            <div class="profile-card" id="detail-profile-card">
-              <!-- Dynamic profile block -->
+          <div style="display: flex; gap: 20px; height: calc(100vh - 180px);">
+            <!-- EMR Left Navigation -->
+            <div style="width: 220px; flex-shrink: 0; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; padding: 15px; display: flex; flex-direction: column; gap: 5px;">
+              <h3 style="font-size: 14px; margin-bottom: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">EMR Sections</h3>
+              <button class="emr-tab-btn active" data-target="emr-profile">Overview & Profile</button>
+              <button class="emr-tab-btn" data-target="emr-vitals">Vitals</button>
+              <button class="emr-tab-btn" data-target="emr-medical-history">Medical History</button>
+              <button class="emr-tab-btn" data-target="emr-family-history">Family History</button>
+              <button class="emr-tab-btn" data-target="emr-cows">COWS Assessment</button>
+              <button class="emr-tab-btn" data-target="emr-sessions">Session Logs</button>
+              <button class="emr-tab-btn" data-target="emr-opd">OPD Dispensation</button>
             </div>
             
-            <!-- Right Column Block -->
-            <div style="display: flex; flex-direction: column; gap: 24px;">
-              <!-- Current Condition & Stage Summary -->
-              <div class="section-box" id="detail-current-condition-container" style="height: auto; min-height: 200px;">
-                <!-- Dynamically populated current stage summary & condition -->
+            <!-- EMR Content Area -->
+            <div style="flex-grow: 1; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; overflow-y: auto; padding: 20px;" id="emr-content-area">
+              
+              <!-- Profile Tab -->
+              <div class="emr-tab-pane active" id="emr-profile">
+                <div class="patient-details-grid">
+                  <div class="profile-card" id="detail-profile-card"></div>
+                  <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <div class="section-box" id="detail-current-condition-container" style="height: auto; min-height: 200px;"></div>
+                  </div>
+                </div>
               </div>
               
-              <!-- Counseling Logs list -->
-              <div class="section-box" style="height: auto; max-height: 400px; display: flex; flex-direction: column;">
-                <div class="section-header" style="flex-shrink: 0; margin-bottom: 16px;">
+              <!-- Vitals Tab -->
+              <div class="emr-tab-pane" id="emr-vitals">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                  <h3>Vitals</h3>
+                  <button class="btn-primary btn-add-emr-record" data-type="vitals">+ Add Vitals</button>
+                </div>
+                <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;">
+                  <thead><tr style="border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">
+                    <th style="padding: 12px;">Date</th><th style="padding: 12px;">BP (mmHg)</th><th style="padding: 12px;">Heart Rate (bpm)</th><th style="padding: 12px;">Temp (°F)</th><th style="padding: 12px;">Weight (kg)</th>
+                  </tr></thead>
+                  <tbody id="tbody-emr-vitals"><tr><td colspan="5" style="text-align:center; padding:20px; color:var(--text-muted);">No vitals recorded</td></tr></tbody>
+                </table>
+              </div>
+
+              <!-- Medical History Tab -->
+              <div class="emr-tab-pane" id="emr-medical-history">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                  <h3>Medical History</h3>
+                  <button class="btn-primary btn-add-emr-record" data-type="medicalHistory">+ Add History</button>
+                </div>
+                <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;">
+                  <thead><tr style="border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">
+                    <th style="padding: 12px;">Condition</th><th style="padding: 12px;">Diagnosis Date</th><th style="padding: 12px;">Status</th>
+                  </tr></thead>
+                  <tbody id="tbody-emr-medical-history"><tr><td colspan="3" style="text-align:center; padding:20px; color:var(--text-muted);">No medical history recorded</td></tr></tbody>
+                </table>
+              </div>
+              
+              <!-- Family History Tab -->
+              <div class="emr-tab-pane" id="emr-family-history">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                  <h3>Family History</h3>
+                  <button class="btn-primary btn-add-emr-record" data-type="familyHistory">+ Add History</button>
+                </div>
+                <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;">
+                  <thead><tr style="border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">
+                    <th style="padding: 12px;">Relation</th><th style="padding: 12px;">Condition</th><th style="padding: 12px;">Notes</th>
+                  </tr></thead>
+                  <tbody id="tbody-emr-family-history"><tr><td colspan="3" style="text-align:center; padding:20px; color:var(--text-muted);">No family history recorded</td></tr></tbody>
+                </table>
+              </div>
+              
+              <!-- COWS Assessment Tab -->
+              <div class="emr-tab-pane" id="emr-cows">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                  <h3>COWS Assessment</h3>
+                  <button class="btn-primary btn-add-emr-record" data-type="cowsAssessment">+ Add Assessment</button>
+                </div>
+                <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;">
+                  <thead><tr style="border-bottom: 1px solid var(--border-light); color: var(--text-secondary);">
+                    <th style="padding: 12px;">Date</th><th style="padding: 12px;">Total Score</th><th style="padding: 12px;">Severity</th><th style="padding: 12px;">Assessed By</th>
+                  </tr></thead>
+                  <tbody id="tbody-emr-cows"><tr><td colspan="4" style="text-align:center; padding:20px; color:var(--text-muted);">No COWS assessment recorded</td></tr></tbody>
+                </table>
+              </div>
+              
+              <!-- Session Logs Tab -->
+              <div class="emr-tab-pane" id="emr-sessions">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                   <h3>Counseling Logs & History</h3>
                   <button class="btn-primary" id="btn-detail-start-session">Initiate Session</button>
                 </div>
-                <div class="list-scrollable sessions-history-list" id="detail-sessions-list" style="flex-grow: 1; overflow-y: auto;">
-                  <!-- Session list -->
-                </div>
+                <div class="list-scrollable sessions-history-list" id="detail-sessions-list"></div>
               </div>
               
-              <!-- OPD Medication History -->
-              <div class="section-box" style="height: auto; max-height: 300px; display: flex; flex-direction: column;">
-                <div class="section-header" style="flex-shrink: 0; margin-bottom: 16px;">
+              <!-- OPD Tab -->
+              <div class="emr-tab-pane" id="emr-opd">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                   <h3 style="display:flex; align-items:center; gap:8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg> OPD Dispensation Log</h3>
                   <span id="opd-next-visit-badge" style="font-size: 11px; padding: 4px 8px; border-radius: 12px; background: rgba(5,205,153,0.1); color: var(--accent-green); font-weight: 600;">Next Visit: —</span>
                 </div>
-                <div class="list-scrollable" id="detail-opd-logs-list" style="flex-grow: 1; overflow-y: auto;">
+                <div class="list-scrollable" id="detail-opd-logs-list">
                   <div style="text-align:center; color:var(--text-muted); font-size:12px; margin-top:20px;">Loading OPD logs...</div>
                 </div>
               </div>
+              
             </div>
           </div>
         </div>
@@ -387,7 +481,7 @@
                   <option value="en-US">English</option>
                 </select>
                 
-                <button class="call-btn start" id="btn-call-start" style="display: none;">
+                <button class="call-btn start" id="btn-call-start" style="display: none !important;">
                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45a12.84 12.84 0 0 0 2.81.7a2 2 0 0 1 2.2 1.72z"></path></svg>
                    Call Patient
                  </button>
@@ -405,11 +499,15 @@
           <!-- Right side: Real-time Transcript & Post-Call Summary Processing -->
           <div style="display: flex; flex-direction: column; height: 100%; min-width: 0;">
             <div class="call-console-details">
-            <div class="console-header">
-              <h3>Live Transcription Feed</h3>
-              <div class="status-indicator">
-                <div class="status-dot" id="call-status-dot"></div>
-                <span id="call-status-label">Idle</span>
+            <div class="console-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+              <h3 style="margin:0;">Live Transcription Feed</h3>
+              <div style="display:flex; gap:12px; align-items:center;">
+                <span id="vad-indicator-Counselor" class="vad-indicator" style="font-size:11px; padding:4px 8px; border-radius:12px; background:var(--bg-input); border:1px solid var(--border-light);">Counselor: Silent</span>
+                <span id="vad-indicator-Patient" class="vad-indicator" style="font-size:11px; padding:4px 8px; border-radius:12px; background:var(--bg-input); border:1px solid var(--border-light);">Patient: Silent</span>
+                <div class="status-indicator" style="margin-left:8px;">
+                  <div class="status-dot" id="call-status-dot"></div>
+                  <span id="call-status-label">Idle</span>
+                </div>
               </div>
             </div>
             
@@ -727,17 +825,17 @@
 
       <!-- Screen 7: Clinical Workflow stage pipeline -->
       <section class="screen-content" id="screen-clinical-workflow">
-        <div class="workflow-board-container" style="display:flex; flex-direction:column; height:100%; width:100%;">
-          <div id="clinical-workflow-toolbar" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; background:var(--bg-card); padding:10px 16px; border-radius:8px; border:1px solid var(--border-light);">
-            <div style="display:flex; gap:12px; align-items:center; flex:1;">
-              <input type="text" id="workflow-search-input" placeholder="Search patient name or ID..." style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:6px 12px; border-radius:6px; font-size:12px; width:200px;">
-              <select id="workflow-sort-select" style="background:var(--bg-input); border:1px solid var(--border-light); color:var(--text-primary); padding:6px 12px; border-radius:6px; font-size:12px;">
+        <div class="workflow-board-container">
+          <div id="clinical-workflow-toolbar" class="workflow-toolbar">
+            <div class="workflow-toolbar-actions">
+              <input type="text" id="workflow-search-input" placeholder="Search patient name or ID...">
+              <select id="workflow-sort-select">
                 <option value="newest">Newest Admission</option>
                 <option value="overdue">Most Overdue</option>
                 <option value="severity">Highest Severity</option>
               </select>
             </div>
-            <div id="workflow-stats-heatmap" style="display:flex; gap:16px; font-size:11px; font-weight:600;">
+            <div id="workflow-stats-heatmap" class="workflow-stats-heatmap">
               <!-- Dynamic Stats -->
             </div>
           </div>
@@ -760,20 +858,200 @@
       </section>
 
       <!-- OPD Dashboard Screen -->
-      <section id="screen-opd" class="screen-content" style="padding-top: 40px;">
-        <div class="dashboard-sections" style="display:block;">
+      <section id="screen-opd" class="screen-content" style="padding-top: 20px;">
+        <div id="header-stats" style="display: flex; gap: 20px; width: 100%; margin-bottom: 25px;">
+          <div class="stats-grid" style="display: flex; gap: 20px; width: 100%;">
+            <div class="stat-card" style="background: var(--bg-item); padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border-light);">
+              <h3 style="margin: 0; font-size: 12px; color: var(--text-secondary);">Today's Visits</h3>
+              <div id="stat-opd-today" style="font-size: 24px; font-weight: 700; color: var(--accent-blue);">0</div>
+            </div>
+            <div class="stat-card" style="background: var(--bg-item); padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border-light);">
+              <h3 style="margin: 0; font-size: 12px; color: var(--text-secondary);">Dispensed</h3>
+              <div id="stat-opd-dispensed" style="font-size: 24px; font-weight: 700; color: var(--accent-green);">0</div>
+            </div>
+            <div class="stat-card" style="background: var(--bg-item); padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border-light);">
+              <h3 style="margin: 0; font-size: 12px; color: var(--text-secondary);">Pending</h3>
+              <div id="stat-opd-pending" style="font-size: 24px; font-weight: 700; color: var(--accent-orange);">0</div>
+            </div>
+            <div class="stat-card" style="background: var(--bg-item); padding: 10px 20px; border-radius: 8px; border: 1px solid var(--border-light);">
+              <h3 style="margin: 0; font-size: 12px; color: var(--text-secondary);">Defaulters</h3>
+              <div id="stat-opd-defaulters" style="font-size: 24px; font-weight: 700; color: var(--accent-red);">0</div>
+            </div>
+          </div>
+        </div>
+        <!-- Sub-navigation for OPD (moved to sidebar) -->
+        <div id="opd-sub-nav" style="display: none;"></div>
+
+        <div id="opd-alerts" style="margin-bottom: 20px;"></div>
+
+        <!-- ALL PATIENTS TAB -->
+        <div id="tab-all-patients" class="tab-content-opd" style="display: none;">
+          <div class="section-box" style="background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-light); margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+              <h2>All Active Patients</h2>
+            </div>
+            <div style="overflow-x: auto;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--border-light); color: var(--text-secondary); font-size: 12px; text-transform: uppercase;">
+                    <th style="padding: 16px;">Patient ID</th>
+                    <th style="padding: 16px;">Name</th>
+                    <th style="padding: 16px;">Phone</th>
+                    <th style="padding: 16px;">Status</th>
+                    <th style="padding: 16px;">Next Visit</th>
+                    <th style="padding: 16px;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="opd-all-patients-body">
+                  <tr><td colspan="6" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading patients...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- QUEUE TAB -->
+        <div id="tab-queue" class="tab-content-opd" style="display: block;">
+          <div class="section-box" style="height: auto; background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-light); margin-bottom: 20px;">
+            <h2>Patient Lookup</h2>
+            <div class="search-input-wrapper" style="margin-bottom: 16px; display: flex; gap: 10px;">
+              <input type="text" id="opd-patient-search" class="form-input" placeholder="Enter Patient ID or Phone..." style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+              <button class="btn-primary" id="btn-opd-search">Search</button>
+            </div>
+            <div id="opd-patient-result"></div>
+          </div>
+
+          <div class="section-box" style="background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-light);">
+            <div class="section-header" style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+              <h2>Today's Medication Queue</h2>
+              <div style="display: flex; gap: 10px;">
+                <button class="btn-primary" id="filter-all">All</button>
+                <button class="btn-secondary" id="filter-pending">Pending</button>
+                <button class="btn-secondary" id="filter-dispensed">Dispensed</button>
+                <button class="btn-primary" id="btn-walkin" style="margin-left: 20px;">Register Walk-in</button>
+              </div>
+            </div>
+            
+            <div class="list-scrollable" style="border-radius: 12px; border: 1px solid var(--border-light); overflow: hidden;">
+              <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;" id="queue-table">
+                <thead>
+                  <tr style="background: rgba(0,0,0,0.02); border-bottom: 1px solid var(--border-light);">
+                    <th style="padding: 16px;">Time/Status</th>
+                    <th style="padding: 16px;">Patient Details</th>
+                    <th style="padding: 16px;">Type</th>
+                    <th style="padding: 16px; text-align: right;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="queue-tbody">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- DISPENSE TAB -->
+        <div id="tab-dispense" class="tab-content-opd" style="display: none;">
+          <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 30px;">
+            <div style="background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-light);">
+              <h3>Patient Verification</h3>
+              <div style="margin-top: 15px;">
+                <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px;">Patient ID or Scan QR</label>
+                <div style="display: flex; gap: 10px;">
+                  <input type="text" id="dispense-patient-id" class="form-input" placeholder="e.g. PAT-001" style="flex: 1; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+                  <button class="btn-secondary" id="btn-verify-patient">Verify</button>
+                </div>
+              </div>
+              <div id="patient-verify-result" style="margin-top: 20px; display: none; padding: 15px; background: rgba(5,205,153,0.1); border-radius: 8px; border: 1px solid var(--accent-green);">
+              </div>
+            </div>
+
+            <div style="background: var(--bg-card); border-radius: 12px; padding: 20px; border: 1px solid var(--border-light);">
+              <h3>Dispense Medication</h3>
+              <form id="dispense-form" style="margin-top: 15px; display: flex; flex-direction: column; gap: 15px;">
+                <div style="display: flex; gap: 15px;">
+                  <div style="flex: 2;">
+                    <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px;">Medicine</label>
+                    <select id="dispense-medicine" class="form-input" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;"></select>
+                  </div>
+                  <div style="flex: 1;">
+                    <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px;">Quantity</label>
+                    <input type="number" id="dispense-qty" class="form-input" required min="1" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+                  </div>
+                </div>
+                <div style="display: flex; gap: 15px;">
+                  <div style="flex: 1;">
+                    <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px;">Next Visit Date</label>
+                    <input type="date" id="dispense-next-visit" class="form-input" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+                  </div>
+                </div>
+                <div>
+                  <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 5px;">Notes (Optional)</label>
+                  <input type="text" id="dispense-notes" class="form-input" placeholder="Any counseling notes..." style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+                </div>
+                <div style="margin-top: 10px; padding: 15px; background: rgba(0,0,0,0.02); border-radius: 8px; border: 1px dashed var(--border-light);">
+                  <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <span style="font-size: 13px; color: var(--text-secondary);">Digital Signature Required</span>
+                    <button type="button" class="btn-secondary" id="btn-mock-signature">Tap to Sign</button>
+                  </div>
+                  <div id="signature-status" style="margin-top: 10px; font-size: 13px; color: var(--accent-green); display: none;">✓ Signed successfully</div>
+                </div>
+                <button type="submit" class="btn-primary" id="btn-submit-dispense" style="margin-top: 10px; padding: 12px; font-size: 16px;">Complete Dispensing</button>
+              </form>
+            </div>
+          </div>
           
+          <div style="margin-top: 30px;">
+            <h3>Recent Dispensing History</h3>
+            <div class="list-scrollable" style="background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-light); margin-top: 15px;">
+              <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;" id="history-table">
+                <thead>
+                  <tr style="background: rgba(0,0,0,0.02); border-bottom: 1px solid var(--border-light);">
+                    <th style="padding: 16px;">Date</th>
+                    <th style="padding: 16px;">Patient</th>
+                    <th style="padding: 16px;">Medicine</th>
+                    <th style="padding: 16px;">Qty</th>
+                    <th style="padding: 16px;">Next Visit</th>
+                  </tr>
+                </thead>
+                <tbody id="history-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- INVENTORY TAB -->
+        <div id="tab-inventory" class="tab-content-opd" style="display: none;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+            <h2>Medicine Inventory</h2>
+            <button class="btn-primary" id="btn-add-medicine">Add Medicine</button>
+          </div>
+          <div class="list-scrollable" style="background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border-light); overflow: hidden;">
+            <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 14px;" id="inventory-table">
+              <thead>
+                <tr style="background: rgba(0,0,0,0.02); border-bottom: 1px solid var(--border-light);">
+                  <th style="padding: 16px;">ID</th>
+                  <th style="padding: 16px;">Name</th>
+                  <th style="padding: 16px;">Stock Level</th>
+                  <th style="padding: 16px;">Expiry Date</th>
+                  <th style="padding: 16px; text-align: right;">Status</th>
+                </tr>
+              </thead>
+              <tbody id="inventory-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- BULK UPLOAD TAB -->
+        <div id="tab-upload" class="tab-content-opd" style="display: none;">
           <div class="section-box" style="width: 100%; text-align: center; padding: 40px; border: 2px dashed var(--border-light); background: rgba(0,0,0,0.02); cursor: pointer;" id="drop-zone">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" stroke-width="2" style="margin-bottom:16px;">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="17 8 12 3 7 8"></polyline>
-              <line x1="12" y1="3" x2="12" y2="15"></line>
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line>
             </svg>
             <h2>Upload OPD Dispensation Sheet</h2>
             <p style="color: var(--text-muted); margin-bottom: 20px;">Drag and drop your .xlsx or .csv file here, or click to browse</p>
             <input type="file" id="file-input" accept=".xlsx, .xls, .csv" style="display: none;">
             <button class="btn-primary" onclick="document.getElementById('file-input').click()">Browse Files</button>
-            
             <div style="margin-top: 20px; text-align: left; background: var(--bg-card); padding: 16px; border-radius: 8px; display: inline-block; border: 1px solid var(--border-light);">
               <h4 style="margin-bottom: 8px;">Required Columns:</h4>
               <ul style="font-size: 13px; color: var(--text-secondary); margin-left: 16px;">
@@ -785,13 +1063,11 @@
               </ul>
             </div>
           </div>
-          
           <div id="preview-section" style="display: none; margin-top: 30px;">
             <div class="section-header">
               <h2>Data Preview (<span id="record-count">0</span> records)</h2>
               <button class="btn-primary" id="btn-sync-data">Confirm & Sync to Database</button>
             </div>
-            
             <div class="list-scrollable" style="max-height: 400px; overflow: auto; border: 1px solid var(--border-light); border-radius: 8px;">
               <table style="width: 100%; text-align: left; border-collapse: collapse; font-size: 13px;" id="preview-table">
                 <thead>
@@ -803,15 +1079,10 @@
                     <th style="padding: 12px; font-weight: 600;">Next Visit</th>
                   </tr>
                 </thead>
-                <tbody id="preview-tbody">
-                </tbody>
+                <tbody id="preview-tbody"></tbody>
               </table>
             </div>
           </div>
-          
-          <!-- Alert Area -->
-          <div id="opd-alerts" style="margin-top: 20px;"></div>
-
         </div>
       </section>
 
@@ -961,12 +1232,193 @@
     </div>
   </div>
 
+  <!-- OPD Modals -->
+  <div id="walkin-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--bg-card); padding: 30px; border-radius: 12px; width: 400px; border: 1px solid var(--border-light);">
+      <h3 style="margin-bottom: 20px;">Register Walk-in Patient</h3>
+      <form id="walkin-form" style="display: flex; flex-direction: column; gap: 15px;">
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Patient ID (if known)</label>
+          <input type="text" id="walkin-id" class="form-input" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Name (Optional)</label>
+          <input type="text" id="walkin-name" class="form-input" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Phone (Optional)</label>
+          <input type="text" id="walkin-phone" class="form-input" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <button type="button" class="btn-secondary" id="btn-close-walkin" style="flex: 1;">Cancel</button>
+          <button type="submit" class="btn-primary" style="flex: 1;">Register & Add to Queue</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="medicine-modal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center;">
+    <div style="background: var(--bg-card); padding: 30px; border-radius: 12px; width: 400px; border: 1px solid var(--border-light);">
+      <h3 style="margin-bottom: 20px;">Add New Medicine</h3>
+      <form id="medicine-form" style="display: flex; flex-direction: column; gap: 15px;">
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Medicine Name</label>
+          <input type="text" id="med-name" class="form-input" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div style="display: flex; gap: 15px;">
+          <div style="flex: 1;">
+            <label style="display: block; font-size: 13px; margin-bottom: 5px;">Stock</label>
+            <input type="number" id="med-stock" class="form-input" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+          <div style="flex: 1;">
+            <label style="display: block; font-size: 13px; margin-bottom: 5px;">Unit</label>
+            <input type="text" id="med-unit" class="form-input" placeholder="e.g. Tablets" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+          </div>
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Expiry Date</label>
+          <input type="date" id="med-expiry" class="form-input" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div>
+          <label style="display: block; font-size: 13px; margin-bottom: 5px;">Low Stock Threshold</label>
+          <input type="number" id="med-threshold" class="form-input" value="100" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px;">
+        </div>
+        <div style="display: flex; gap: 10px; margin-top: 10px;">
+          <button type="button" class="btn-secondary" id="btn-close-medicine" style="flex: 1;">Cancel</button>
+          <button type="submit" class="btn-primary" style="flex: 1;">Save Medicine</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- EMR Record Modal -->
+  <div class="modal-overlay" id="modal-emr-record" style="background: rgba(15, 23, 42, 0.85); align-items: center; justify-content: center; z-index: 9999;">
+    <div class="modal-content" style="width: 100%; max-width: 520px; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 16px; padding: 28px; position: relative;">
+      <button id="btn-close-emr-modal" style="position: absolute; top: 16px; right: 16px; background: transparent; border: none; color: var(--text-muted); cursor: pointer; transition: color 0.2s;" aria-label="Close modal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+      </button>
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 22px; border-bottom: 1px solid var(--border-light); padding-bottom: 16px;">
+        <div id="emr-modal-icon" style="width: 40px; height: 40px; border-radius: 10px; background: rgba(79, 172, 254, 0.1); display: flex; align-items: center; justify-content: center; color: var(--accent-blue);">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </div>
+        <div>
+          <h3 id="emr-modal-title" style="font-size: 18px; font-weight: 700; margin: 0;">Add Record</h3>
+          <p id="emr-modal-subtitle" style="font-size: 12px; color: var(--text-muted); margin: 2px 0 0 0;">Fill in the details below</p>
+        </div>
+      </div>
+      <form id="form-emr-record" style="display: flex; flex-direction: column; gap: 14px;">
+        <input type="hidden" id="emr-record-type" value="">
+
+        <!-- Vitals Fields -->
+        <div id="emr-fields-vitals" class="emr-field-group" style="display: none;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label for="emr-vitals-bp" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Blood Pressure</label>
+              <input type="text" id="emr-vitals-bp" placeholder="e.g. 120/80" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+            <div>
+              <label for="emr-vitals-hr" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Heart Rate (bpm)</label>
+              <input type="number" id="emr-vitals-hr" placeholder="e.g. 72" required min="30" max="250" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+            <div>
+              <label for="emr-vitals-temp" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Temperature (°F)</label>
+              <input type="number" id="emr-vitals-temp" placeholder="e.g. 98.6" required step="0.1" min="90" max="110" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+            <div>
+              <label for="emr-vitals-weight" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Weight (kg)</label>
+              <input type="number" id="emr-vitals-weight" placeholder="e.g. 70" required step="0.1" min="10" max="300" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Medical History Fields -->
+        <div id="emr-fields-medicalHistory" class="emr-field-group" style="display: none;">
+          <div>
+            <label for="emr-med-condition" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Condition / Diagnosis</label>
+            <input type="text" id="emr-med-condition" placeholder="e.g. Hypertension, Hepatitis B" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+          </div>
+          <div style="margin-top: 12px;">
+            <label for="emr-med-status" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Status</label>
+            <select id="emr-med-status" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+              <option value="Active">Active</option>
+              <option value="Resolved">Resolved</option>
+              <option value="Chronic">Chronic</option>
+              <option value="In Remission">In Remission</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Family History Fields -->
+        <div id="emr-fields-familyHistory" class="emr-field-group" style="display: none;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label for="emr-family-relation" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Relation</label>
+              <select id="emr-family-relation" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+                <option value="Father">Father</option>
+                <option value="Mother">Mother</option>
+                <option value="Sibling">Sibling</option>
+                <option value="Spouse">Spouse</option>
+                <option value="Grandparent">Grandparent</option>
+                <option value="Uncle/Aunt">Uncle/Aunt</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label for="emr-family-condition" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Condition</label>
+              <input type="text" id="emr-family-condition" placeholder="e.g. Diabetes, Substance Abuse" required style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+          </div>
+          <div style="margin-top: 12px;">
+            <label for="emr-family-notes" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Notes (Optional)</label>
+            <textarea id="emr-family-notes" placeholder="Additional details..." rows="3" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; resize: vertical; transition: border-color 0.2s;"></textarea>
+          </div>
+        </div>
+
+        <!-- COWS Assessment Fields -->
+        <div id="emr-fields-cowsAssessment" class="emr-field-group" style="display: none;">
+          <div style="background: rgba(255, 152, 0, 0.06); border: 1px solid rgba(255, 152, 0, 0.2); border-radius: 10px; padding: 12px; margin-bottom: 4px;">
+            <p style="font-size: 11px; color: var(--text-secondary); margin: 0; line-height: 1.5;">
+              <strong style="color: var(--accent-orange);">COWS Scale:</strong> 0–4 = No withdrawal · 5–12 = Mild · 13–24 = Moderate · 25–36 = Moderately Severe · 37+ = Severe
+            </p>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+            <div>
+              <label for="emr-cows-score" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Total Score (0–48)</label>
+              <input type="number" id="emr-cows-score" placeholder="e.g. 8" required min="0" max="48" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-primary); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; transition: border-color 0.2s;">
+            </div>
+            <div>
+              <label for="emr-cows-severity" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; display: block; font-weight: 600;">Severity (Auto-calculated)</label>
+              <input type="text" id="emr-cows-severity" readonly value="—" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-light); color: var(--text-muted); padding: 10px; border-radius: 8px; font-family: var(--font-body); font-size: 13px; opacity: 0.7;">
+            </div>
+          </div>
+        </div>
+
+        <!-- Date display -->
+        <div style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--bg-input); border-radius: 8px; border: 1px solid var(--border-light);">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          <span style="font-size: 12px; color: var(--text-secondary);">Date: <strong id="emr-record-date" style="color: var(--text-primary);"></strong></span>
+        </div>
+
+        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px;">
+          <button type="button" id="btn-cancel-emr-form" class="btn-secondary" style="padding: 10px 20px;">Cancel</button>
+          <button type="submit" class="btn-primary" id="btn-submit-emr-form" style="padding: 10px 24px; display: flex; align-items: center; gap: 8px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Save Record
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast Notification Center -->
   <div class="toast-container" id="toast-container"></div>
    
   <!-- System Javascript scripts -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script src="js/opd-app.js" defer></script>
     <script src="js/app.bundle.js" defer></script>
 </body>
 </html>
