@@ -1055,10 +1055,20 @@ io.on('connection', (socket) => {
 
   // 6. Either party ends the call
   socket.on('end-call', (data) => {
-    // data = { to: 'targetSocketId' }
-    if (data.to) {
-      console.log(`🛑 Call ended. Notifying ${data.to}`);
-      io.to(data.to).emit('call-ended');
+    let target = data.to;
+    if (!target && data.toPatientId) {
+      target = patientSockets[data.toPatientId];
+    }
+    if (target) {
+      console.log(`🛑 Call ended. Notifying ${target}`);
+      io.to(target).emit('call-ended');
+    }
+    // Also notify all counselor/dashboard sockets that the call has ended
+    for (const id of Object.keys(counselorSockets)) {
+      const socketId = counselorSockets[id];
+      if (socketId && socketId !== socket.id) {
+        io.to(socketId).emit('call-ended');
+      }
     }
     // Cleanup relay pair if exists
     if (relayPairs[socket.id]) {
@@ -1087,6 +1097,13 @@ io.on('connection', (socket) => {
   socket.on('transcript-update', (data) => {
     if (data.to) {
       io.to(data.to).emit('transcript-update', { text: data.text, sender: data.sender });
+    }
+    // Also relay to all counselor/dashboard sockets to display live transcriptions on web observers
+    for (const id of Object.keys(counselorSockets)) {
+      const socketId = counselorSockets[id];
+      if (socketId && socketId !== socket.id) {
+        io.to(socketId).emit('transcript-update', { text: data.text, sender: data.sender });
+      }
     }
   });
 

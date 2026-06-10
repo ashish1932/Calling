@@ -175,76 +175,123 @@ class CallManager {
         this.endCall();
       });
 
-this.socket.on('dashboard-observe-call', async (data) => {
-         if (!this.room && data.roomName) {
-             console.log('[LiveKit] Auto-observing mobile-to-mobile call in room:', data.roomName);
-             try {
-                 const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
-                 const resp = await fetch('/api/livekit/token', {
-                     method: 'POST',
-                     headers: { 
-                       'Content-Type': 'application/json',
-                       'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
-                       'X-Requested-With': 'XMLHttpRequest'
-                     },
-                     body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
-                 });
-                 const tokenData = await resp.json();
-                 if (tokenData.token && window.LivekitClient) {
-                     this.isActive = true;
-                     this.activePatient = { id: data.patientId, name: 'Patient ' + data.patientId };
-                     window.CounselFlow.app.switchScreen('call-console');
-                     this.duration = 0;
-                     this.timerInterval = setInterval(() => {
-                       this.duration++;
-                       const hrs = Math.floor(this.duration / 3600).toString();
-                       const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
-                       const secs = (this.duration % 60).toString().padStart(2, '0');
-                       const timerEl = document.getElementById('call-duration-timer');
-                       if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
-                     }, 1000);
-                     
-                     this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
-                     this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-                         if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
-                              const element = track.attach();
-                              document.body.appendChild(element);
-                              if (typeof element.play === 'function') {
-                                  element.play().catch(e => {
-                                      console.warn('[LiveKit] Audio autoplay blocked:', e);
-                                      this.showAutoplayUnlockBanner();
-                                  });
-                              }
-                             
-                             const stream = new MediaStream([track.mediaStreamTrack]);
-                             const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-                             this.setupStreamingSTT(stream, speakerName);
-                         }
-                     });
-                     this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
-                         console.log('[LiveKit] Participant disconnected:', participant.identity);
-                         window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
-                         this.endCall();
-                     });
-                     
-                     this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
-                         console.log('[LiveKit] Room disconnected.');
-                         this.endCall();
-                     });
-
-                     // Listen for transcription from mobile clients
-                     this.socket.on('transcription', (transcriptData) => {
-                         if (transcriptData && transcriptData.roomName === data.roomName && transcriptData.text) {
-                             const speaker = transcriptData.speaker === 'counselor' ? 'Counselor' : 'Patient';
-                             this.addTranscriptLine(speaker, transcriptData.text);
-                         }
-                     });
-
-                     await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
-                     window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+      this.socket.on('dashboard-observe-call', async (data) => {
+         if (!this.isActive && !this.room && data.roomName) {
+             const isSdp = data.roomName.includes('v=0') || data.roomName.includes('\n') || data.roomName.length > 128;
+             console.log('[LiveKit] Auto-observing mobile-to-mobile call. Is WebRTC SDP:', isSdp, 'Room:', data.roomName);
+             
+             let patientName = 'Patient ' + data.patientId;
+             let targetPatient = null;
+             if (window.CounselFlow && window.CounselFlow.app && window.CounselFlow.app.patients) {
+                 const pt = window.CounselFlow.app.patients.find(p => p.id === data.patientId);
+                 if (pt) {
+                     targetPatient = pt;
+                     patientName = pt.name || patientName;
                  }
-             } catch (err) {
-                 console.error('[LiveKit] Failed to observe call:', err);
+             }
+
+             if (isSdp) {
+                 // WebRTC Peer-to-Peer / Relay Mode
+                 this.isActive = true;
+                 this.isObserver = true;
+                 this.activePatient = targetPatient || { id: data.patientId, name: patientName };
+                 this.callDirection = "Mobile Call";
+                 
+                 // Update UI to active call state
+                 this.setupObserverUI(this.activePatient);
+                 
+                 window.CounselFlow.app.switchScreen('call-console');
+                 
+                 this.duration = 0;
+                 if (this.timerInterval) clearInterval(this.timerInterval);
+                 this.timerInterval = setInterval(() => {
+                   this.duration++;
+                   const hrs = Math.floor(this.duration / 3600).toString();
+                   const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                   const secs = (this.duration % 60).toString().padStart(2, '0');
+                   const timerEl = document.getElementById('call-duration-timer');
+                   if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                 }, 1000);
+                 
+                 window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile WebRTC call.", "info");
+             } else {
+                 // LiveKit Mode
+                 try {
+                     const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
+                     const resp = await fetch('/api/livekit/token', {
+                         method: 'POST',
+                         headers: { 
+                           'Content-Type': 'application/json',
+                           'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                           'X-Requested-With': 'XMLHttpRequest'
+                         },
+                         body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
+                     });
+                     const tokenData = await resp.json();
+                     if (tokenData.token && window.LivekitClient) {
+                         this.isActive = true;
+                         this.isObserver = true;
+                         this.activePatient = targetPatient || { id: data.patientId, name: patientName };
+                         this.callDirection = "Mobile Call";
+                         
+                         // Update UI to active call state
+                         this.setupObserverUI(this.activePatient);
+                         
+                         window.CounselFlow.app.switchScreen('call-console');
+                         
+                         this.duration = 0;
+                         if (this.timerInterval) clearInterval(this.timerInterval);
+                         this.timerInterval = setInterval(() => {
+                           this.duration++;
+                           const hrs = Math.floor(this.duration / 3600).toString();
+                           const mins = Math.floor((this.duration % 3600) / 60).toString().padStart(2, '0');
+                           const secs = (this.duration % 60).toString().padStart(2, '0');
+                           const timerEl = document.getElementById('call-duration-timer');
+                           if (timerEl) timerEl.innerText = `${hrs}:${mins}:${secs}`;
+                         }, 1000);
+                         
+                         this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+                         this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                             if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
+                                  const element = track.attach();
+                                  document.body.appendChild(element);
+                                  if (typeof element.play === 'function') {
+                                      element.play().catch(e => {
+                                          console.warn('[LiveKit] Audio autoplay blocked:', e);
+                                          this.showAutoplayUnlockBanner();
+                                      });
+                                  }
+                                 
+                                 const stream = new MediaStream([track.mediaStreamTrack]);
+                                 const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                                 this.setupStreamingSTT(stream, speakerName);
+                              }
+                          });
+                          this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
+                              console.log('[LiveKit] Participant disconnected:', participant.identity);
+                              window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
+                              this.endCall();
+                          });
+                          
+                          this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                              console.log('[LiveKit] Room disconnected.');
+                              this.endCall();
+                          });
+
+                          // Listen for transcription from mobile clients
+                          this.socket.on('transcription', (transcriptData) => {
+                              if (transcriptData && transcriptData.roomName === data.roomName && transcriptData.text) {
+                                  const speaker = transcriptData.speaker === 'counselor' ? 'Counselor' : 'Patient';
+                                  this.addTranscriptLine(speaker, transcriptData.text);
+                              }
+                          });
+
+                          await this.room.connect('wss://ai-assistant-ommd272n.livekit.cloud', tokenData.token);
+                          window.CounselFlow.app.showToast("Call Observer Active", "Live transcription enabled for mobile call.", "info");
+                      }
+                  } catch (err) {
+                      console.error('[LiveKit] Failed to observe call:', err);
+                  }
              }
          }
        });
@@ -1105,9 +1152,59 @@ this.socket.on('dashboard-observe-call', async (data) => {
     window.CounselFlow.app.showToast("Call Connected", `Tele-counseling call started with ${patient.name}.`, "success");
   }
 
+  setupObserverUI(patient) {
+    const statusDot = document.getElementById('call-status-dot');
+    const statusLabel = document.getElementById('call-status-label');
+    const recordBtn = document.getElementById('btn-call-record');
+    
+    if (statusDot) statusDot.className = 'status-dot rec';
+    if (statusLabel) statusLabel.innerText = 'Observing Active Call';
+    if (recordBtn) recordBtn.className = 'call-btn record recording';
+
+    const nameEl = document.getElementById('call-recipient-name');
+    if (nameEl) nameEl.innerText = patient.name;
+
+    const detailsEl = document.getElementById('call-recipient-details');
+    if (detailsEl) {
+        detailsEl.innerText = `${patient.id} | ${patient.addictionCategory || 'General'}`;
+    }
+
+    const avatarEl = document.getElementById('call-recipient-avatar');
+    if (avatarEl) {
+        avatarEl.innerText = patient.name.split(' ').map(n => n[0]).join('');
+        avatarEl.classList.add('active-call');
+    }
+
+    const startBtn = document.getElementById('btn-call-start');
+    if (startBtn) startBtn.style.display = 'none';
+    const endBtn = document.getElementById('btn-call-end');
+    if (endBtn) endBtn.style.display = 'flex';
+
+    const transcriptLog = document.getElementById('call-transcript-log');
+    if (transcriptLog) {
+        transcriptLog.innerHTML = '';
+        transcriptLog.style.display = 'flex';
+    }
+
+    const summarySection = document.getElementById('call-post-summary-section');
+    if (summarySection) summarySection.style.display = 'none';
+
+    const postCallPanel = document.getElementById('post-call-actions-panel');
+    if (postCallPanel) postCallPanel.style.display = 'none';
+
+    const timerEl = document.getElementById('call-duration-timer');
+    if (timerEl) timerEl.innerText = '0:00:00';
+    
+    this.addWarningToTranscriptLog(
+      "Call Observer Active",
+      `The Dashboard is observing the mobile call with ${patient.name || 'Patient'}. Live transcription will stream below.`
+    );
+  }
+
   // End Tele-Counseling session call and trigger AI processing
   endCall() {
     if (!this.isActive) return;
+    this.isObserver = false;
     
     // Log call attempt (Connected) (Phase 2, Solution Scope #2)
     this.logCallAttempt(this.activePatient, this.duration, this.callDirection || "Outbound", "Connected");
