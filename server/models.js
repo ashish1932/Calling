@@ -74,7 +74,8 @@ const CounselorSchema = new mongoose.Schema({
   email: String,
   phone: String,
   specialization: String,
-  avatar: String
+  avatar: String,
+  district: String
 }, { timestamps: true, strict: true });
 
 const MedicineSchema = new mongoose.Schema({

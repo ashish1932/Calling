@@ -1068,7 +1068,7 @@ export default function App() {
               autoCorrect={false}
             />
 
-            {userRole === 'patient' && (
+            {(userRole === 'patient' || userRole === 'counselor') && (
               <>
                 <Text style={styles.label}>Preferred Language</Text>
                 <View style={styles.langRow}>
@@ -1409,7 +1409,8 @@ export default function App() {
           )}
 
           {/* Active Call Language selection bar */}
-          {userRole === 'patient' && (
+          {/* Active Call Language selection bar */}
+          {(userRole === 'patient' || userRole === 'counselor') && (
             <View style={[styles.langRow, { marginBottom: 15, width: '100%' }]}>
               {[
                 { code: 'en', name: 'English' },
@@ -1420,21 +1421,23 @@ export default function App() {
                   key={lang.code} 
                   onPress={async () => {
                     setSelectedLanguage(lang.code);
-                    // Also persist to server DB so counselor gets updated
-                    const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
-                    try {
-                      await fetch(`${SERVER_URL}/api/auth/patient-login`, {
-                        method: 'POST',
-                        headers: {
-                          'Content-Type': 'application/json',
-                          'X-Requested-With': 'XMLHttpRequest',
-                          'ngrok-skip-browser-warning': '1'
-                            },
-                        body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
-                      });
-                      console.log('[MobileApp] Updated preferred language mid-call:', lang.code);
-                    } catch (err) {
-                      console.warn('[MobileApp] Failed to update language on server:', err.message);
+                    if (userRole === 'patient' && patientId) {
+                      // Also persist to server DB so counselor gets updated
+                      const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
+                      try {
+                        await fetch(`${SERVER_URL}/api/auth/patient-login`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'ngrok-skip-browser-warning': '1'
+                          },
+                          body: JSON.stringify({ patientId: patientId, preferredLanguage: langMap[lang.code] })
+                        });
+                        console.log('[MobileApp] Updated preferred language mid-call:', lang.code);
+                      } catch (err) {
+                        console.warn('[MobileApp] Failed to update language on server:', err.message);
+                      }
                     }
                   }}
                   style={[styles.langBtn, selectedLanguage === lang.code && styles.langBtnActive]}

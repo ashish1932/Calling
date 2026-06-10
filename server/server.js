@@ -158,6 +158,19 @@ mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(() => consol
 
 app.get('/api/patients', authenticateJWT, async (req, res) => {
   try {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.split(' ')[1];
+      if (token.startsWith('mock-jwt-token-counselor-')) {
+        const counselorId = token.replace('mock-jwt-token-counselor-', '');
+        const counselor = await Counselor.findOne({ id: counselorId });
+        if (counselor && counselor.district) {
+          console.log(`[DEBUG] Filtering patients for counselor ${counselorId} in district ${counselor.district}`);
+          const patients = await Patient.find({ district: counselor.district });
+          return res.json(patients);
+        }
+      }
+    }
     const patients = await Patient.find({});
     res.json(patients);
   } catch (error) {
@@ -180,12 +193,12 @@ app.post('/api/login', async (req, res) => {
     if (role === 'counselor') {
       const counselor = await Counselor.findOne({ id });
       if (counselor) {
-        return res.json({ success: true, name: counselor.name || id, role: 'counselor', token: 'mock-jwt-token-counselor' });
+        return res.json({ success: true, name: counselor.name || id, role: 'counselor', token: 'mock-jwt-token-counselor-' + counselor.id });
       }
     } else if (role === 'patient') {
       const patient = await Patient.findOne({ id });
       if (patient) {
-        return res.json({ success: true, name: patient.name || id, role: 'patient', token: 'mock-jwt-token-patient' });
+        return res.json({ success: true, name: patient.name || id, role: 'patient', token: 'mock-jwt-token-patient-' + patient.id });
       }
     } else {
       return res.status(400).json({ error: 'Invalid role' });
@@ -216,7 +229,7 @@ app.post('/api/auth/patient-login', async (req, res) => {
         success: true, 
         name: patient.name || patientId, 
         role: 'patient',
-        token: 'mock-jwt-token-patient'
+        token: 'mock-jwt-token-patient-' + patient.id
       });
     }
 
@@ -241,7 +254,7 @@ app.post('/api/auth/login', async (req, res) => {
         success: true, 
         name: counselor.name || username, 
         role: 'counselor',
-        token: 'mock-jwt-token-counselor'
+        token: 'mock-jwt-token-counselor-' + counselor.id
       });
     }
 
@@ -251,7 +264,7 @@ app.post('/api/auth/login', async (req, res) => {
         success: true,
         name: patient.name || username,
         role: 'patient',
-        token: 'mock-jwt-token-patient'
+        token: 'mock-jwt-token-patient-' + patient.id
       });
     }
 
