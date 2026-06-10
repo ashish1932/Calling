@@ -6,6 +6,9 @@ const axios = require('axios');
 const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
+if (!global.crypto) {
+  global.crypto = crypto;
+}
 const multer = require('multer');
 const FormData = require('form-data');
 const { Server } = require('socket.io');
@@ -923,6 +926,14 @@ app.post('/api/ai/gemini/chat', async (req, res) => {
 const connectedUsers = {}; // socketId -> { role: 'counselor' | 'patient', id: string }
 const patientSockets = {}; // patientId -> socketId
 const counselorSockets = {}; // counselorId (or 'counselor') -> socketId
+
+app.get('/api/patients/online', async (req, res) => {
+  try {
+    res.json({ onlinePatientIds: Object.keys(patientSockets) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Audio relay sessions: when WebRTC P2P fails, audio is relayed through server
 // relayPairs[socketIdA] = socketIdB  and  relayPairs[socketIdB] = socketIdA
