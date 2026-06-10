@@ -804,10 +804,15 @@ app.post('/api/ai/audio/transcriptions', upload.single('file'), async (req, res)
       return res.status(400).json({ error: { message: "No file provided" } });
     }
 
+    let contentType = req.file.mimetype || 'audio/webm';
+    if (contentType === 'audio/m4a') {
+      contentType = 'audio/x-m4a';
+    }
+
     const form = new FormData();
     form.append('file', req.file.buffer, { 
       filename: req.file.originalname || 'chunk.webm', 
-      contentType: req.file.mimetype || 'audio/webm' 
+      contentType: contentType
     });
     
     // Map frontend language parameter to Sarvam's language_code

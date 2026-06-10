@@ -200,6 +200,9 @@ class CallManager {
                  // Update UI to active call state
                  this.setupObserverUI(this.activePatient);
                  
+                 if (window.CounselFlow && window.CounselFlow.app) {
+                     window.CounselFlow.app.selectedPatient = this.activePatient;
+                 }
                  window.CounselFlow.app.switchScreen('call-console');
                  
                  this.duration = 0;
@@ -237,6 +240,9 @@ class CallManager {
                          // Update UI to active call state
                          this.setupObserverUI(this.activePatient);
                          
+                         if (window.CounselFlow && window.CounselFlow.app) {
+                             window.CounselFlow.app.selectedPatient = this.activePatient;
+                         }
                          window.CounselFlow.app.switchScreen('call-console');
                          
                          this.duration = 0;
