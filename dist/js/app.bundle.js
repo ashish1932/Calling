@@ -2601,16 +2601,37 @@ class CallManager {
     this.remoteAudio.autoplay = true;
     // Unlock autoplay: browsers need a user gesture
     this.audioUnlockHandler = () => {
-      if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
-        this.remoteAudio.play().catch(e => {
-          console.warn('[WebRTC] Audio autoplay blocked:', e);
-          // Show persistent unlock instruction
-          this.addWarningToTranscriptLog(
-            "Audio Blocked", 
-            "Browser blocked autoplay. Click anywhere on the screen to enable audio."
-          );
-        });
+      // Only attempt to play remoteAudio if a source is set
+      if (this.remoteAudio && (this.remoteAudio.srcObject || this.remoteAudio.src)) {
+        if (typeof this.remoteAudio.play === 'function') {
+          this.remoteAudio.play().catch(e => {
+            console.warn('[WebRTC] Audio autoplay blocked:', e);
+            if (!document.getElementById('autoplay-unlock-banner')) {
+              this.addWarningToTranscriptLog(
+                "Audio Blocked", 
+                "Browser blocked autoplay. Click anywhere on the screen to enable audio."
+              );
+            }
+          });
+        }
       }
+      // Resume any suspended AudioContexts (Relay or STT)
+      if (this.relayAudioCtx && this.relayAudioCtx.state === 'suspended') {
+        this.relayAudioCtx.resume().catch(e => console.warn('[Relay] Failed to resume AudioContext:', e));
+      }
+      for (const speaker of Object.keys(this.sttAudioContexts)) {
+        const ctx = this.sttAudioContexts[speaker];
+        if (ctx && ctx.state === 'suspended') {
+          ctx.resume().catch(e => console.warn(`[STT] Failed to resume AudioContext for ${speaker}:`, e));
+        }
+      }
+      // Play all other audio elements (like LiveKit ones) to unlock them
+      const audioElements = document.querySelectorAll('audio');
+      audioElements.forEach(el => {
+        if (el !== this.remoteAudio && el.paused) {
+          el.play().catch(e => console.warn('[LiveKit] Failed to play attached audio element on gesture:', e));
+        }
+      });
     };
     // Add persistent handler that doesn't remove itself
     document.addEventListener('click', this.audioUnlockHandler);
@@ -2729,9 +2750,14 @@ this.socket.on('dashboard-observe-call', async (data) => {
                      this.room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
                      this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
                          if (track.kind === 'audio' || track.kind === LivekitClient.Track.Kind.Audio) {
-                             const element = track.attach();
-                             document.body.appendChild(element);
-                             if (typeof element.play === 'function') element.play().catch(e=>console.warn(e));
+                              const element = track.attach();
+                              document.body.appendChild(element);
+                              if (typeof element.play === 'function') {
+                                  element.play().catch(e => {
+                                      console.warn('[LiveKit] Audio autoplay blocked:', e);
+                                      this.showAutoplayUnlockBanner();
+                                  });
+                              }
                              const stream = new MediaStream([track.mediaStreamTrack]);
                              const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
                              this.setupStreamingSTT(stream, speakerName);
@@ -2850,7 +2876,10 @@ this.socket.on('dashboard-observe-call', async (data) => {
           const element = track.attach();
           document.body.appendChild(element);
           if (typeof element.play === 'function') {
-            element.play().catch(e => console.warn('[LiveKit] Audio autoplay blocked:', e));
+            element.play().catch(e => {
+              console.warn('[LiveKit] Audio autoplay blocked:', e);
+              this.showAutoplayUnlockBanner();
+            });
           }
           // Wire up Sarvam Streaming STT!
           const stream = new MediaStream([track.mediaStreamTrack]);
@@ -3250,8 +3279,6 @@ this.socket.on('dashboard-observe-call', async (data) => {
         btn.className = 'btn-primary';
         btn.style.cssText = 'padding: 5px 12px; font-size: 11px; white-space: nowrap; flex-shrink: 0;';
         btn.addEventListener('click', () => {
-          // Re-attach srcObject in case it was set before the banner appeared
-          // Then call play() directly on the in-memory Audio object (no DOM lookup)
           if (this.peerConnection) {
             const receivers = this.peerConnection.getReceivers();
             const audioReceiver = receivers.find(r => r.track && r.track.kind === 'audio');
@@ -3259,19 +3286,38 @@ this.socket.on('dashboard-observe-call', async (data) => {
               this.remoteAudio.srcObject = new MediaStream([audioReceiver.track]);
             }
           }
-          if (this.remoteAudio && typeof this.remoteAudio.play === 'function') {
-            this.remoteAudio.play()
-              .then(() => {
-                this._audioUnlocked = true;
+          let promises = [];
+          if (this.remoteAudio && (this.remoteAudio.srcObject || this.remoteAudio.src)) {
+            promises.push(this.remoteAudio.play());
+          }
+          const audioElements = document.querySelectorAll('audio');
+          audioElements.forEach(el => {
+            if (el !== this.remoteAudio) {
+              promises.push(el.play());
+            }
+          });
+          if (promises.length === 0) {
+            bannerDiv.remove();
+            window.CounselFlow.app.showToast('Audio Unlocked', 'Audio playback is enabled.', 'success');
+            return;
+          }
+          Promise.all(promises)
+            .then(() => {
+              this._audioUnlocked = true;
+              bannerDiv.remove();
+              window.CounselFlow.app.showToast('Audio Enabled', 'Remote audio is now playing.', 'success');
+            })
+            .catch(err => {
+              console.error('[Audio] Manual audio unlock failed:', err);
+              const anyPlaying = Array.from(audioElements).some(el => !el.paused);
+              if (anyPlaying) {
                 bannerDiv.remove();
                 window.CounselFlow.app.showToast('Audio Enabled', 'Remote audio is now playing.', 'success');
-              })
-              .catch(err => {
-                console.error('[WebRTC] Manual audio unlock failed:', err);
+              } else {
                 btn.textContent = '⚠ Retry — Click Again';
                 window.CounselFlow.app.showToast('Audio Error', 'Click the Enable Audio button again.', 'error');
-              });
-          }
+              }
+            });
         });
         bannerDiv.appendChild(label);
         bannerDiv.appendChild(btn);
