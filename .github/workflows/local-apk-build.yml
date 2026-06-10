@@ -2,7 +2,7 @@ name: Build Android APK (Local Runner)
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ "main", "master", "counceling-flow" ]
   workflow_dispatch:
 
 jobs:

@@ -2,7 +2,7 @@ name: Android Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "counceling-flow" ]
   workflow_dispatch:
 
 jobs:
