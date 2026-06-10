@@ -947,7 +947,9 @@ const API_BASE = window.CounselFlow.API_BASE;
 // Inject headers into all fetch requests targeting our API
 const originalFetch = window.fetch;
 window.fetch = async function(resource, config) {
+  let isApiCall = false;
   if (typeof resource === 'string' && resource.includes(API_BASE)) {
+    isApiCall = true;
     config = config || {};
     config.headers = config.headers || {};
     if (config.headers instanceof Headers) {
@@ -962,7 +964,19 @@ window.fetch = async function(resource, config) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
   }
-  return originalFetch(resource, config);
+  
+  const response = await originalFetch(resource, config);
+  
+  if (isApiCall && response.status === 401 && !resource.includes('/auth/')) {
+    console.warn("Session expired or unauthorized. Logging out.");
+    window.localStorage.removeItem('counseling_active_role');
+    window.localStorage.removeItem('counseling_logged_in_name');
+    window.localStorage.removeItem('counseling_logged_in_staff');
+    window.localStorage.removeItem('counseling_logged_in_token');
+    window.location.reload();
+  }
+  
+  return response;
 };
 
 async function getStoredPatients() {

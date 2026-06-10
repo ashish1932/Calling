@@ -32,6 +32,14 @@ class AppController {
       window.localStorage.removeItem('counseling_gemini_api_key');
     } catch (e) {}
     this.cacheDOMElements();
+    
+    const activeRole = window.CounselFlow.getActiveRole();
+    const loggedInName = window.CounselFlow.safeGetItem('counseling_logged_in_name');
+    if (!activeRole || !loggedInName) {
+      this.showLoginScreen();
+      return;
+    }
+
     this.patients = await window.CounselFlow.getStoredPatients();
     this.patients.forEach(pt => {
       if (!pt.history) pt.history = [];
