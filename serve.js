@@ -145,7 +145,7 @@ const server = http.createServer((req, res) => {
     }
     
     // Inject secure Content-Security-Policy and OWASP security headers
-    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: https: ws: http:; img-src 'self' data: https: blob:; media-src 'self' data: https: blob:;";
+    const csp = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: http://localhost:5001 https://cdn.socket.io https://infird.com https://overbridgenet.com https://static.cloudflareinsights.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' wss: https: ws: http:; img-src 'self' data: https: blob:; media-src 'self' data: https: blob:;";
     res.setHeader('Content-Security-Policy', csp);
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('X-Content-Type-Options', 'nosniff');
