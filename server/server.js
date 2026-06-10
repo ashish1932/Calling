@@ -180,12 +180,12 @@ app.post('/api/login', async (req, res) => {
     if (role === 'counselor') {
       const counselor = await Counselor.findOne({ id });
       if (counselor) {
-        return res.json({ success: true, name: counselor.name || id, role: 'counselor' });
+        return res.json({ success: true, name: counselor.name || id, role: 'counselor', token: 'mock-jwt-token-counselor' });
       }
     } else if (role === 'patient') {
       const patient = await Patient.findOne({ id });
       if (patient) {
-        return res.json({ success: true, name: patient.name || id, role: 'patient' });
+        return res.json({ success: true, name: patient.name || id, role: 'patient', token: 'mock-jwt-token-patient' });
       }
     } else {
       return res.status(400).json({ error: 'Invalid role' });
@@ -194,6 +194,70 @@ app.post('/api/login', async (req, res) => {
     return res.status(401).json({ error: 'Invalid credentials. User not found.' });
   } catch (error) {
     console.error('Login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/auth/patient-login', async (req, res) => {
+  console.log('[DEBUG] Incoming mobile patient-login request:', req.body);
+  try {
+    const { patientId, preferredLanguage } = req.body;
+    if (!patientId) {
+      return res.status(400).json({ error: 'Missing patientId' });
+    }
+
+    const patient = await Patient.findOne({ id: patientId });
+    if (patient) {
+      if (preferredLanguage) {
+        patient.preferredLanguage = preferredLanguage;
+        await patient.save();
+      }
+      return res.json({ 
+        success: true, 
+        name: patient.name || patientId, 
+        role: 'patient',
+        token: 'mock-jwt-token-patient'
+      });
+    }
+
+    return res.status(401).json({ error: 'Invalid credentials. User not found.' });
+  } catch (error) {
+    console.error('Patient login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  console.log('[DEBUG] Incoming mobile login request:', req.body);
+  try {
+    const { username, password } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Missing username' });
+    }
+
+    const counselor = await Counselor.findOne({ id: username });
+    if (counselor) {
+      return res.json({ 
+        success: true, 
+        name: counselor.name || username, 
+        role: 'counselor',
+        token: 'mock-jwt-token-counselor'
+      });
+    }
+
+    const patient = await Patient.findOne({ id: username });
+    if (patient) {
+      return res.json({
+        success: true,
+        name: patient.name || username,
+        role: 'patient',
+        token: 'mock-jwt-token-patient'
+      });
+    }
+
+    return res.status(401).json({ error: 'Invalid credentials. User not found.' });
+  } catch (error) {
+    console.error('Counselor login error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
