@@ -2,15 +2,17 @@ name: EAS Build
 
 on:
   push:
-    branches: [ "main", "master", "counceling-flow" ]
+    branches: [ "**" ]
     paths:
-      - 'patient-mobile-app/**'
+      - 'mobile/**'
   workflow_dispatch:
 
 jobs:
   build:
     name: Build Mobile App
     runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_SERVER_URL: https://telecalling.cubegtp.com
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -20,14 +22,15 @@ jobs:
         with:
           node-version: 18
           cache: 'npm'
-          cache-dependency-path: patient-mobile-app/package-lock.json
+          cache-dependency-path: mobile/package-lock.json
 
       - name: Install Dependencies
-        working-directory: ./patient-mobile-app
+        working-directory: ./mobile
         run: npm ci
 
       - name: Build Android Preview APK
-        working-directory: ./patient-mobile-app
+        working-directory: ./mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx eas-cli build --platform android --profile preview --non-interactive
+
