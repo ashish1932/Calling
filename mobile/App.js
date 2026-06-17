@@ -187,8 +187,9 @@ export default function App() {
           'ngrok-skip-browser-warning': '1'
         }
       });
-      const data = await res.json();
-      const me = data.find(p => p.id === patientId);
+      const resData = await res.json();
+      const patientsList = resData && Array.isArray(resData.data) ? resData.data : (Array.isArray(resData) ? resData : []);
+      const me = patientsList.find(p => p.id === patientId);
       if (me) {
         setPatientName(me.name || patientId);
         setSelectedLanguage(me.preferredLanguage || 'en');
@@ -760,7 +761,8 @@ export default function App() {
       }
       if (response.ok) {
         const data = await response.json();
-        setPatients(data);
+        const patientsList = data && Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+        setPatients(patientsList);
       } else {
         console.warn('Failed to fetch patients:', response.status);
       }
