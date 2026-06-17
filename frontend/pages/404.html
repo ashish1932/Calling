@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 - Page Not Found</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: var(--bg-main);
+      color: var(--text-primary);
+      font-family: 'Inter', sans-serif;
+      text-align: center;
+    }
+    .error-container {
+      background: var(--bg-card);
+      padding: 40px;
+      border-radius: 12px;
+      border: 1px solid var(--border-light);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      max-width: 400px;
+      width: 100%;
+    }
+    h1 { font-size: 64px; color: var(--accent-red); margin-bottom: 10px; }
+    h2 { font-size: 24px; margin-bottom: 20px; }
+    p { color: var(--text-muted); margin-bottom: 30px; }
+  </style>
+</head>
+<body>
+  <div class="error-container">
+    <h1>404</h1>
+    <h2>Page Not Found</h2>
+    <p>The page you are looking for doesn't exist or has been moved.</p>
+    <a href="/login.html" class="btn-primary" style="text-decoration: none; display: inline-block;">Return to Home</a>
+  </div>
+</body>
+</html>
