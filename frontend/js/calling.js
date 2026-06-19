@@ -767,20 +767,90 @@ class CallManager {
     // Tell the server to create a relay pair with the patient socket
     this.socket.emit('audio-relay-start', { to: this.patientSocketId });
 
-    // 1. Capture and stream local mic → server → patient
+    // 1. Capture and stream local mic → server → patient using Web Audio API (PCM WAV)
     try {
-      const options = { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 32000 };
-      this.relayRecorder = new MediaRecorder(this.localStream, options);
-      this.relayRecorder.ondataavailable = async (event) => {
-        if (event.data && event.data.size > 100 && this.isRelayMode && this.isActive && !this.isMuted) {
-          const buf = await event.data.arrayBuffer();
-          this.socket.emit('audio-chunk', buf);
+      this.relayMicAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      this.relaySourceNode = this.relayMicAudioCtx.createMediaStreamSource(this.localStream);
+      this.relayProcessorNode = this.relayMicAudioCtx.createScriptProcessor(4096, 1, 1);
+      
+      let pcmBuffers = [];
+      let pcmLength = 0;
+      
+      this.relayProcessorNode.onaudioprocess = (e) => {
+        if (!this.isRelayMode || !this.isActive || this.isMuted) return;
+        const inputData = e.inputBuffer.getChannelData(0); // Float32Array
+        
+        // Convert to Int16 PCM
+        const int16Buffer = new Int16Array(inputData.length);
+        for (let i = 0; i < inputData.length; i++) {
+          const s = Math.max(-1, Math.min(1, inputData[i]));
+          int16Buffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
+        pcmBuffers.push(int16Buffer);
+        pcmLength += int16Buffer.length;
       };
-      this.relayRecorder.start(1000); // 1000ms chunks
-      console.log('[Relay] Mic relay recorder started (1000ms chunks)');
+      
+      this.relaySourceNode.connect(this.relayProcessorNode);
+      this.relayProcessorNode.connect(this.relayMicAudioCtx.destination);
+      
+      const writeWavHeader = (dataLength, sampleRate) => {
+        const buffer = new ArrayBuffer(44);
+        const view = new DataView(buffer);
+        // RIFF
+        view.setUint32(0, 0x52494646, false);
+        // file length
+        view.setUint32(4, 36 + dataLength, true);
+        // WAVE
+        view.setUint32(8, 0x57415645, false);
+        // fmt 
+        view.setUint32(12, 0x666d7420, false);
+        // format chunk length
+        view.setUint32(16, 16, true);
+        // sample format (raw)
+        view.setUint16(20, 1, true);
+        // channel count (1)
+        view.setUint16(22, 1, true);
+        // sample rate
+        view.setUint32(24, sampleRate, true);
+        // byte rate (sample rate * block align)
+        view.setUint32(28, sampleRate * 2, true);
+        // block align (channel count * bytes per sample)
+        view.setUint16(32, 2, true);
+        // bits per sample
+        view.setUint16(34, 16, true);
+        // data
+        view.setUint32(36, 0x64617461, false);
+        // data chunk length
+        view.setUint32(40, dataLength, true);
+        return buffer;
+      };
+
+      this.relayInterval = setInterval(() => {
+        if (pcmLength === 0) return;
+        
+        const flatPcm = new Int16Array(pcmLength);
+        let offset = 0;
+        for (const buf of pcmBuffers) {
+          flatPcm.set(buf, offset);
+          offset += buf.length;
+        }
+        
+        pcmBuffers = [];
+        pcmLength = 0;
+        
+        const wavHeader = writeWavHeader(flatPcm.byteLength, 16000);
+        const wavFileBytes = new Uint8Array(wavHeader.byteLength + flatPcm.byteLength);
+        wavFileBytes.set(new Uint8Array(wavHeader), 0);
+        wavFileBytes.set(new Uint8Array(flatPcm.buffer, flatPcm.byteOffset, flatPcm.byteLength), wavHeader.byteLength);
+        
+        if (this.socket && this.socket.connected) {
+          this.socket.emit('audio-chunk', wavFileBytes.buffer);
+        }
+      }, 1000);
+      
+      console.log('[Relay] Web Audio PCM WAV relay recorder started (1000ms chunks, 16kHz mono)');
     } catch (e) {
-      console.error('[Relay] Could not start relay recorder:', e);
+      console.error('[Relay] Could not start WAV relay recorder:', e);
     }
 
     // 2. Receive and play incoming audio chunks from patient
@@ -835,7 +905,7 @@ class CallManager {
         source.start(startAt);
         this.relayNextPlayTime = startAt + audioBuf.duration;
       } catch (e) {
-        // Ignore decode errors for partial/tiny chunks
+        console.warn('[Relay] Failed to decode/play incoming audio chunk:', e);
       }
     });
 
@@ -845,10 +915,24 @@ class CallManager {
   stopSocketAudioRelay() {
     if (!this.isRelayMode) return;
     this.isRelayMode = false;
-    if (this.relayRecorder && this.relayRecorder.state !== 'inactive') {
-      try { this.relayRecorder.stop(); } catch(e) {}
+    
+    if (this.relayInterval) {
+      clearInterval(this.relayInterval);
+      this.relayInterval = null;
     }
-    this.relayRecorder = null;
+    if (this.relayProcessorNode) {
+      try { this.relayProcessorNode.disconnect(); } catch(e) {}
+      this.relayProcessorNode = null;
+    }
+    if (this.relaySourceNode) {
+      try { this.relaySourceNode.disconnect(); } catch(e) {}
+      this.relaySourceNode = null;
+    }
+    if (this.relayMicAudioCtx) {
+      try { this.relayMicAudioCtx.close(); } catch(e) {}
+      this.relayMicAudioCtx = null;
+    }
+    
     if (this.relayAudioCtx) {
       this.relayAudioCtx.close().catch(() => {});
       this.relayAudioCtx = null;
@@ -860,7 +944,6 @@ class CallManager {
     // Note: We don't remove the unlock handlers here as they're removed in endCall cleanup
     console.log('[Relay] Socket audio relay stopped.');
   }
-
   // Visual warning banner inside call transcript feed (Error Handling #4)
   addWarningToTranscriptLog(title, message) {
     requestAnimationFrame(() => {

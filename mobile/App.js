@@ -24,6 +24,63 @@ import { webrtcService, SERVER_URL, setServerUrl } from './src/services/webrtc';
 import * as Notifications from 'expo-notifications';
 import { Audio } from 'expo-av';
 
+const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const lookup = new Uint8Array(256);
+for (let i = 0; i < chars.length; i++) {
+  lookup[chars.charCodeAt(i)] = i;
+}
+
+function base64ToArrayBuffer(base64) {
+  let bufferLength = base64.length * 0.75;
+  const len = base64.length;
+  let p = 0;
+  let encoded1, encoded2, encoded3, encoded4;
+
+  if (base64[base64.length - 1] === '=') {
+    bufferLength--;
+    if (base64[base64.length - 2] === '=') {
+      bufferLength--;
+    }
+  }
+
+  const arrayBuffer = new ArrayBuffer(bufferLength);
+  const bytes = new Uint8Array(arrayBuffer);
+
+  for (let i = 0; i < len; i += 4) {
+    encoded1 = lookup[base64.charCodeAt(i)];
+    encoded2 = lookup[base64.charCodeAt(i + 1)];
+    encoded3 = lookup[base64.charCodeAt(i + 2)];
+    encoded4 = lookup[base64.charCodeAt(i + 3)];
+
+    bytes[p++] = (encoded1 << 2) | (encoded2 >> 4);
+    bytes[p++] = ((encoded2 & 15) << 4) | (encoded3 >> 2);
+    bytes[p++] = ((encoded3 & 3) << 6) | (encoded4 & 63);
+  }
+
+  return arrayBuffer;
+}
+
+function arrayBufferToBase64(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  const len = bytes.length;
+  let base64 = '';
+
+  for (let i = 0; i < len; i += 3) {
+    base64 += chars[bytes[i] >> 2];
+    base64 += chars[((bytes[i] & 3) << 4) | (bytes[i + 1] >> 4)];
+    base64 += chars[((bytes[i + 1] & 15) << 2) | (bytes[i + 2] >> 6)];
+    base64 += chars[bytes[i + 2] & 63];
+  }
+
+  if (len % 3 === 2) {
+    base64 = base64.substring(0, base64.length - 1) + '=';
+  } else if (len % 3 === 1) {
+    base64 = base64.substring(0, base64.length - 2) + '==';
+  }
+
+  return base64;
+}
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -526,9 +583,10 @@ export default function App() {
 
             await currentRecording.startAsync();
             
-            // 5-second chunks: longer context = better Whisper sentence completion
-            // and fewer mid-word cuts at chunk boundaries
-            await new Promise(resolve => setTimeout(resolve, 5000));
+            // If in relay mode, use 2-second chunks for low-latency voice transmission.
+            // Otherwise, use 5-second chunks for better Whisper sentence context.
+            const recordDuration = webrtcService.isRelayMode ? 2000 : 5000;
+            await new Promise(resolve => setTimeout(resolve, recordDuration));
             
             if (!recordingIntervalRef.current || transcriptionLoopIdRef.current !== currentLoopId) {
               await currentRecording.stopAndUnloadAsync();
@@ -553,10 +611,8 @@ export default function App() {
                 try {
                   const { FileSystem } = require('expo-file-system');
                   const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-                  const binary = atob(base64);
-                  const bytes = new Uint8Array(binary.length);
-                  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                  webrtcService.sendAudioChunk(bytes.buffer);
+                  const arrayBuffer = base64ToArrayBuffer(base64);
+                  webrtcService.sendAudioChunk(arrayBuffer);
                 } catch (relayErr) {
                   console.warn('[ASR] Failed to relay audio chunk:', relayErr.message);
                 }
@@ -912,6 +968,14 @@ export default function App() {
             playThroughEarpieceAndroid: false,
           }).catch(e => console.warn('[Relay] Audio mode set failed:', e.message));
         } catch(e) {}
+        try {
+          const InCallManager = getOriginalInCallManager();
+          if (InCallManager) {
+            InCallManager.setForceSpeakerphoneOn(true);
+          }
+        } catch (e) {
+          console.warn('[Relay] InCallManager set speakerphone failed:', e.message);
+        }
         startRealLiveTranscription();
       },
 
@@ -921,21 +985,16 @@ export default function App() {
           const { Audio } = require('expo-av');
           const { FileSystem } = require('expo-file-system');
           // data arrives as ArrayBuffer from server
-          let bytes;
+          let arrayBuf;
           if (data instanceof ArrayBuffer) {
-            bytes = new Uint8Array(data);
+            arrayBuf = data;
           } else if (data && data.buffer) {
-            bytes = new Uint8Array(data.buffer);
+            arrayBuf = data.buffer;
           } else {
             return; // unsupported format
           }
-          // Convert to base64 to write to file
-          let binary = '';
-          for (let i = 0; i < bytes.length; i++) {
-            binary += String.fromCharCode(bytes[i]);
-          }
-          const base64 = btoa(binary);
-          const tmpUri = FileSystem.cacheDirectory + `relay_chunk_${Date.now()}.m4a`;
+          const base64 = arrayBufferToBase64(arrayBuf);
+          const tmpUri = FileSystem.cacheDirectory + `relay_chunk_${Date.now()}.wav`;
           await FileSystem.writeAsStringAsync(tmpUri, base64, { encoding: FileSystem.EncodingType.Base64 });
           const { sound } = await Audio.Sound.createAsync(
             { uri: tmpUri },
