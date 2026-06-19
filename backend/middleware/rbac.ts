@@ -36,7 +36,7 @@ const authorizePatientAccess = async (req, res, next) => {
     }
     
     // Admins and roles that aren't restricted by district bypass this
-    if (req.user.roleKey !== 'counsellor' && req.user.roleKey !== 'ddrc') {
+    if (req.user.roleKey !== 'counsellor' && req.user.roleKey !== 'counselor' && req.user.roleKey !== 'ddrc') {
       return next();
     }
     

@@ -12,7 +12,9 @@ class AIOrchestrator {
   // Returns { endpoint, headers, model } based on the active AI provider (Groq or Gemini)
   _getChatConfig() {
     const provider = (window.CounselFlow.CONFIG.AI_PROVIDER || 'groq').toLowerCase();
-    const token = window.localStorage.getItem('counseling_logged_in_token');
+    const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+      ? window.CounselFlow.safeGetItem('counseling_logged_in_token')
+      : null;
     const headers = { 
       "Content-Type": "application/json",
       "X-Requested-With": "XMLHttpRequest",
@@ -334,7 +336,9 @@ The JSON object must have EXACTLY these fields:
       else if (languageCode.startsWith('pa')) reqLang = 'pa';
       formData.append("language", reqLang);
 
-      const token = window.localStorage.getItem('counseling_logged_in_token');
+      const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+        ? window.CounselFlow.safeGetItem('counseling_logged_in_token')
+        : null;
       const headers = {
         "X-Requested-With": "XMLHttpRequest",
         "ngrok-skip-browser-warning": "1"

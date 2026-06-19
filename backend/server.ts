@@ -19,7 +19,7 @@ const { SarvamAIClient } = require('sarvamai');
 const logger = require('./utils/logger');
 
 // Models
-const { Staff, Counselor, Session } = require('./models');
+const { Staff, Counselor, Session, Patient, CallLog, Medicine } = require('./models');
 
 // Middleware
 const errorHandler = require('./middleware/error');
@@ -73,10 +73,13 @@ const authenticateJWT = (req, res, next) => {
       req.user = user;
       
       // Fetch district for counselor/ddrc to enable RBAC district checking
-      if (user.roleKey === 'counsellor' || user.roleKey === 'ddrc') {
+      if (user.roleKey === 'counsellor' || user.roleKey === 'counselor' || user.roleKey === 'ddrc') {
         try {
-          const Counselor = require('./models').Counselor;
-          const c = await Counselor.findOne({ id: user.staffId });
+          const { Counselor, Staff } = require('./models');
+          let c = await Counselor.findOne({ id: user.staffId });
+          if (!c) {
+            c = await Staff.findOne({ staffId: user.staffId });
+          }
           if (c && c.district) {
             req.user.district = c.district;
           }
@@ -125,9 +128,27 @@ app.use((req: any, res: any, next: any) => {
 
 // CORS
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['https://telecalling.cubegtp.com'];
+
+const isNgrokOrLocalOrigin = (origin) => {
+  if (!origin) return true;
+  try {
+    const parsedUrl = new URL(origin);
+    const hostname = parsedUrl.hostname;
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.endsWith('.ngrok-free.dev') ||
+      hostname.endsWith('.ngrok.io') ||
+      hostname.endsWith('.tunnelmole.net')
+    );
+  } catch (e) {
+    return false;
+  }
+};
+
 const corsOptions = {
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+    if (!origin || allowedOrigins.includes(origin) || isNgrokOrLocalOrigin(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -248,8 +269,320 @@ mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 }).then(async () => 
         }
       }
     }
+
+    // Seed Patients if there are no patients in the database
+    const patientCount = await Patient.countDocuments();
+    if (patientCount === 0) {
+      logger.info('Database empty of patients. Seeding default patient list...');
+      const seedPatients = [
+        {
+          id: 'PAT-001',
+          name: 'Balbir Singh',
+          age: 34,
+          gender: 'Male',
+          phone: '+91-98765-43210',
+          address: 'Gali No. 3, Putligarh, Amritsar, Punjab',
+          district: 'Amritsar',
+          consentCaptured: true,
+          counselorId: 'STAFF-003',
+          assignedDate: '2026-05-10',
+          status: 'Active',
+          severity: 'High',
+          addictionCategory: 'Heroin / Opioids',
+          progress: 35,
+          avatarColor: '#4f46e5',
+          cravingsIntensity: 7,
+          recoveryPhase: 'Early Abstinence',
+          preferredLanguage: 'Punjabi',
+          clinicalStage: 2,
+          admissionDate: '2026-05-10',
+          checkpoints: { withdrawalStabilised: true, layer1And2Ready: false, familyPsychoedAttended: false, day30ReviewPassed: false },
+          consent: true,
+          joinDate: '2026-05-10',
+          assignedCounselor: 'Dr. Amanpreet Kaur',
+          lastSessionDate: '2026-06-18',
+          history: [
+            {
+              sessionId: 'SESS-101',
+              date: '2026-06-18T10:30:00Z',
+              duration: '12:30',
+              language: 'Punjabi',
+              summary: {
+                escalationLevel: 0,
+                followUp: '2026-06-20',
+                _scores: { average: 92 }
+              }
+            },
+            {
+              sessionId: 'SESS-102',
+              date: '2026-06-15T11:15:00Z',
+              duration: '10:45',
+              language: 'Punjabi',
+              summary: {
+                escalationLevel: 0,
+                followUp: '2026-06-18',
+                _scores: { average: 88 }
+              }
+            }
+          ]
+        },
+        {
+          id: 'PAT-002',
+          name: 'Gurpreet Singh',
+          age: 28,
+          gender: 'Male',
+          phone: '+91-98765-43211',
+          address: 'Model Town, Jalandhar, Punjab',
+          district: 'Jalandhar',
+          consentCaptured: true,
+          counselorId: 'STAFF-004',
+          assignedDate: '2026-05-12',
+          status: 'Monitored',
+          severity: 'Medium',
+          addictionCategory: 'Alcohol',
+          progress: 55,
+          avatarColor: '#0ea5e9',
+          cravingsIntensity: 4,
+          recoveryPhase: 'Active Recovery',
+          preferredLanguage: 'Punjabi',
+          clinicalStage: 3,
+          admissionDate: '2026-05-12',
+          checkpoints: { withdrawalStabilised: true, layer1And2Ready: true, familyPsychoedAttended: false, day30ReviewPassed: false },
+          consent: true,
+          joinDate: '2026-05-12',
+          assignedCounselor: 'Dr. Manpreet Sodhi',
+          lastSessionDate: '2026-06-17',
+          history: [
+            {
+              sessionId: 'SESS-201',
+              date: '2026-06-17T14:20:00Z',
+              duration: '08:15',
+              language: 'Punjabi',
+              summary: {
+                escalationLevel: 0,
+                followUp: '2026-06-24',
+                _scores: { average: 95 }
+              }
+            }
+          ]
+        },
+        {
+          id: 'PAT-003',
+          name: 'Jaswinder Kaur',
+          age: 42,
+          gender: 'Female',
+          phone: '+91-98765-43212',
+          address: 'Civil Lines, Ludhiana, Punjab',
+          district: 'Ludhiana',
+          consentCaptured: true,
+          counselorId: 'STAFF-005',
+          assignedDate: '2026-04-05',
+          status: 'Completed',
+          severity: 'Low',
+          addictionCategory: 'Synthetic Drugs',
+          progress: 95,
+          avatarColor: '#10b981',
+          cravingsIntensity: 1,
+          recoveryPhase: 'Maintenance',
+          preferredLanguage: 'Hindi',
+          clinicalStage: 6,
+          admissionDate: '2026-04-05',
+          checkpoints: { withdrawalStabilised: true, layer1And2Ready: true, familyPsychoedAttended: true, day30ReviewPassed: true },
+          consent: true,
+          joinDate: '2026-04-05',
+          assignedCounselor: 'Dr. Harinder Gill',
+          lastSessionDate: '2026-06-10',
+          history: [
+            {
+              sessionId: 'SESS-301',
+              date: '2026-06-10T09:00:00Z',
+              duration: '15:20',
+              language: 'Hindi',
+              summary: {
+                escalationLevel: 0,
+                followUp: 'Completed Program',
+                _scores: { average: 98 }
+              }
+            }
+          ]
+        },
+        {
+          id: 'PAT-004',
+          name: 'Manpreet Singh',
+          age: 26,
+          gender: 'Male',
+          phone: '+91-98765-43213',
+          address: 'Urban Estate, Patiala, Punjab',
+          district: 'Patiala',
+          consentCaptured: true,
+          counselorId: 'STAFF-006',
+          assignedDate: '2026-06-01',
+          status: 'Risk',
+          severity: 'High',
+          addictionCategory: 'Heroin / Opioids',
+          progress: 20,
+          avatarColor: '#f43f5e',
+          cravingsIntensity: 9,
+          recoveryPhase: 'Early Abstinence',
+          preferredLanguage: 'Punjabi',
+          clinicalStage: 1,
+          admissionDate: '2026-06-01',
+          checkpoints: { withdrawalStabilised: false, layer1And2Ready: false, familyPsychoedAttended: false, day30ReviewPassed: false },
+          consent: true,
+          joinDate: '2026-06-01',
+          assignedCounselor: 'Dr. Gurbaksh Singh',
+          lastSessionDate: '2026-06-19',
+          history: [
+            {
+              sessionId: 'SESS-401',
+              date: '2026-06-19T08:00:00Z',
+              duration: '18:45',
+              language: 'Punjabi',
+              summary: {
+                escalationLevel: 2,
+                escalationResolvedAt: null,
+                followUp: '2026-06-20 - Urgent escalation',
+                _scores: { average: 75 }
+              }
+            }
+          ]
+        }
+      ];
+      await Patient.insertMany(seedPatients);
+      logger.info('Successfully seeded patients.');
+    }
+
+    // Seed CallLogs if empty
+    const callLogCount = await CallLog.countDocuments();
+    if (callLogCount === 0) {
+      logger.info('Database empty of call logs. Seeding default call logs...');
+      const seedLogs = [
+        {
+          logId: 'LOG-101',
+          timestamp: '2026-06-18T10:30:00Z',
+          patientId: 'PAT-001',
+          patientName: 'Balbir Singh',
+          counselorId: 'STAFF-003',
+          counselorName: 'Dr. Amanpreet Kaur',
+          sessionId: 'SESS-101',
+          direction: 'Outbound',
+          duration: '12:30',
+          disposition: 'Completed',
+          recordingUrl: '/recordings/SESS-101.wav',
+          summary: {
+            escalationLevel: 0,
+            followUp: '2026-06-20',
+            _scores: { average: 92 }
+          }
+        },
+        {
+          logId: 'LOG-102',
+          timestamp: '2026-06-15T11:15:00Z',
+          patientId: 'PAT-001',
+          patientName: 'Balbir Singh',
+          counselorId: 'STAFF-003',
+          counselorName: 'Dr. Amanpreet Kaur',
+          sessionId: 'SESS-102',
+          direction: 'Outbound',
+          duration: '10:45',
+          disposition: 'Completed',
+          recordingUrl: '/recordings/SESS-102.wav',
+          summary: {
+            escalationLevel: 0,
+            followUp: '2026-06-18',
+            _scores: { average: 88 }
+          }
+        },
+        {
+          logId: 'LOG-201',
+          timestamp: '2026-06-17T14:20:00Z',
+          patientId: 'PAT-002',
+          patientName: 'Gurpreet Singh',
+          counselorId: 'STAFF-004',
+          counselorName: 'Dr. Manpreet Sodhi',
+          sessionId: 'SESS-201',
+          direction: 'Outbound',
+          duration: '08:15',
+          disposition: 'Completed',
+          recordingUrl: '/recordings/SESS-201.wav',
+          summary: {
+            escalationLevel: 0,
+            followUp: '2026-06-24',
+            _scores: { average: 95 }
+          }
+        },
+        {
+          logId: 'LOG-301',
+          timestamp: '2026-06-10T09:00:00Z',
+          patientId: 'PAT-003',
+          patientName: 'Jaswinder Kaur',
+          counselorId: 'STAFF-005',
+          counselorName: 'Dr. Harinder Gill',
+          sessionId: 'SESS-301',
+          direction: 'Outbound',
+          duration: '15:20',
+          disposition: 'Completed',
+          recordingUrl: '/recordings/SESS-301.wav',
+          summary: {
+            escalationLevel: 0,
+            followUp: 'Completed Program',
+            _scores: { average: 98 }
+          }
+        },
+        {
+          logId: 'LOG-401',
+          timestamp: '2026-06-19T08:00:00Z',
+          patientId: 'PAT-004',
+          patientName: 'Manpreet Singh',
+          counselorId: 'STAFF-006',
+          counselorName: 'Dr. Gurbaksh Singh',
+          sessionId: 'SESS-401',
+          direction: 'Outbound',
+          duration: '18:45',
+          disposition: 'Completed',
+          recordingUrl: '/recordings/SESS-401.wav',
+          summary: {
+            escalationLevel: 2,
+            escalationResolvedAt: null,
+            followUp: '2026-06-20 - Urgent escalation',
+            _scores: { average: 75 }
+          }
+        },
+        {
+          logId: 'LOG-MISSED-01',
+          timestamp: '2026-06-19T11:00:00Z',
+          patientId: 'PAT-004',
+          patientName: 'Manpreet Singh',
+          counselorId: 'STAFF-006',
+          counselorName: 'Dr. Gurbaksh Singh',
+          sessionId: 'SESS-402',
+          direction: 'Outbound',
+          duration: '00:00',
+          disposition: 'Missed',
+          recordingUrl: '',
+          summary: {}
+        }
+      ];
+      await CallLog.insertMany(seedLogs);
+      logger.info('Successfully seeded call logs.');
+    }
+
+    // Seed Medicines if empty
+    const medicineCount = await Medicine.countDocuments();
+    if (medicineCount === 0) {
+      logger.info('Database empty of medicines. Seeding default medicines...');
+      const seedMedicines = [
+        { id: 'MED-001', name: 'Buprenorphine', stock: 1500, unit: 'Tablets', expiryDate: '2027-12-31', lowStockThreshold: 100, defaultQuantity: 5, defaultFrequency: 'Daily', defaultDuration: 7, category: 'Opioid Substitution' },
+        { id: 'MED-002', name: 'Methadone', stock: 800, unit: 'ml', expiryDate: '2027-06-30', lowStockThreshold: 200, defaultQuantity: 10, defaultFrequency: 'Daily', defaultDuration: 5, category: 'Opioid Substitution' },
+        { id: 'MED-003', name: 'Naltrexone', stock: 400, unit: 'Tablets', expiryDate: '2028-03-31', lowStockThreshold: 50, defaultQuantity: 2, defaultFrequency: 'Weekly', defaultDuration: 14, category: 'Antagonist' },
+        { id: 'MED-004', name: 'Diazepam', stock: 200, unit: 'Tablets', expiryDate: '2026-11-30', lowStockThreshold: 50, defaultQuantity: 4, defaultFrequency: 'Daily', defaultDuration: 3, category: 'Anxiolytic' }
+      ];
+      await Medicine.insertMany(seedMedicines);
+      logger.info('Successfully seeded medicines.');
+    }
+
   } catch (err) {
-    logger.error('Error seeding counselors or staff: %O', err);
+    logger.error('Error seeding counselors, staff or patients: %O', err);
   }
 })
   .catch(err => {
@@ -465,7 +798,7 @@ io.on('connection', (socket) => {
       delete sarvamStreams[streamKey];
     }
 
-    const apiKey = process.env.SARVAM_API_KEY;
+    const apiKey = process.env.SARVAM_API_KEY || 'sk_lst0lo51_JTbjepcAbL4GGeDbtzRXigsS';
     if (!apiKey) {
       console.error('[Sarvam STT] SARVAM_API_KEY not set in .env');
       socket.emit('stt-error', { message: 'SARVAM_API_KEY not configured on server.' });
@@ -476,11 +809,11 @@ io.on('connection', (socket) => {
       const client = new SarvamAIClient({ apiSubscriptionKey: apiKey });
       const sarvamSocket = await client.speechToTextStreaming.connect({
         model: 'saaras:v3',
-        mode: mode,
         'language-code': language,
         high_vad_sensitivity: 'true',
         vad_signals: 'true',
-        reconnectAttempts: 3
+        reconnectAttempts: 3,
+        "Api-Subscription-Key": apiKey
       });
 
       sarvamSocket.on('open', () => {

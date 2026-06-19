@@ -67,12 +67,18 @@ const translations = {
   }
 };
 
-let currentLang = localStorage.getItem('appLang') || 'en';
+let currentLang = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+  ? (window.CounselFlow.safeGetItem('appLang') || 'en')
+  : (() => { try { return localStorage.getItem('appLang') || 'en'; } catch(e) { return 'en'; } })();
 
 function setLanguage(lang) {
   if (translations[lang]) {
     currentLang = lang;
-    localStorage.setItem('appLang', lang);
+    if (window.CounselFlow && typeof window.CounselFlow.safeSetItem === 'function') {
+      window.CounselFlow.safeSetItem('appLang', lang);
+    } else {
+      try { localStorage.setItem('appLang', lang); } catch(e) {}
+    }
     applyTranslations();
   }
 }

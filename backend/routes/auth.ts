@@ -74,7 +74,7 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
           return res.json({
             success: true,
             name: payload.name,
-            role: 'counselor',
+            role: 'counsellor',
             token: accessToken,
             refreshToken,
             user: payload
@@ -165,7 +165,7 @@ router.post('/auth/login', validate(authLoginSchema), async (req, res, next) => 
       return res.json({
         success: true,
         name: payload.name,
-        role: 'counselor',
+        role: 'counsellor',
         token: accessToken,
         refreshToken,
         user: payload

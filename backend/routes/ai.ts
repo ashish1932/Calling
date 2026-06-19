@@ -73,7 +73,7 @@ router.post('/ai/chat/completions', async (req, res, next) => {
 
 router.post('/ai/audio/transcriptions', upload.single('file'), async (req, res, next) => {
   try {
-    let apiKey = process.env.SARVAM_API_KEY;
+    let apiKey = process.env.SARVAM_API_KEY || 'sk_lst0lo51_JTbjepcAbL4GGeDbtzRXigsS';
 
     if (!req.file) {
       return res.status(400).json({ error: { message: "No file provided" } });
@@ -82,6 +82,10 @@ router.post('/ai/audio/transcriptions', upload.single('file'), async (req, res, 
     let contentType = req.file.mimetype || 'audio/webm';
     if (contentType === 'audio/m4a') {
       contentType = 'audio/x-m4a';
+    } else if (contentType === 'application/octet-stream' || contentType === 'application/x-www-form-urlencoded') {
+      if (req.file.originalname && req.file.originalname.endsWith('.m4a')) contentType = 'audio/x-m4a';
+      else if (req.file.originalname && req.file.originalname.endsWith('.wav')) contentType = 'audio/wav';
+      else contentType = 'audio/webm';
     }
 
     const form = new FormData();

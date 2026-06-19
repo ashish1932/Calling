@@ -53,7 +53,7 @@ router.post('/opd/upload', authorizeRoles('spo', 'opd_staff'), async (req, res, 
 // OPD MEDICATION LOGS
 // ==========================================
 
-router.get('/opd/logs/:patientId', authorizeRoles('spo', 'ddrc', 'opd_staff'), async (req, res, next) => {
+router.get('/opd/logs/:patientId', authorizeRoles('spo', 'ddrc', 'opd_staff', 'counsellor', 'supervisor', 'ditsu'), async (req, res, next) => {
   try {
     const { patientId } = req.params;
     const page = parseInt(req.query.page) || 1;

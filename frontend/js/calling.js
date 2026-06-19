@@ -106,7 +106,7 @@ class CallManager {
       // Always connect to the same origin (serve.js proxies /socket.io → port 5001)
       // This works locally (localhost:3001) AND via ngrok without any URL changes.
       const socketUrl = window.location.origin;
-      this.socket = io(socketUrl, { transports: ['websocket', 'polling'] });
+      this.socket = io(socketUrl, { transports: ['polling', 'websocket'] });
 
       this.socket.on('connect', () => {
         console.log('[WebRTC] Connected to Signaling Server:', this.socket.id);
@@ -225,7 +225,7 @@ class CallManager {
                          method: 'POST',
                          headers: { 
                            'Content-Type': 'application/json',
-                           'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
+                           'Authorization': 'Bearer ' + ((window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') ? (window.CounselFlow.safeGetItem('token') || '') : (localStorage.getItem('token') || '')),
                            'X-Requested-With': 'XMLHttpRequest'
                          },
                          body: JSON.stringify({ roomName: data.roomName, participantName, isCounselor: true })
@@ -269,7 +269,7 @@ class CallManager {
                                   }
                                  
                                  const stream = new MediaStream([track.mediaStreamTrack]);
-                                 const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
+                                 const speakerName = participant.identity === data.patientId ? "Patient" : "Counselor";
                                  this.setupStreamingSTT(stream, speakerName);
 
                                  if (this.callRecordCtx && this.callRecordDest) {
@@ -327,6 +327,7 @@ class CallManager {
 
        // ── Sarvam Streaming STT Events ──
        this.socket.on('stt-transcript', (data) => {
+         console.log('[STT Debug] stt-transcript received:', data);
          if (data && data.text && this.isActive) {
            // Apply hallucination guard
            const t = data.text.trim();
@@ -339,9 +340,14 @@ class CallManager {
              '.   .', '. . .', '...',
            ];
            const tLower = t.toLowerCase().replace(/[.,!?;*"]/g, '').trim();
-           if (HALLUCINATIONS.some(h => tLower === h)) return;
+           if (HALLUCINATIONS.some(h => tLower === h)) {
+             console.log('[STT Debug] Filtered as hallucination:', tLower);
+             return;
+           }
 
            this.addTranscriptLine(data.speaker, data.text);
+         } else {
+           console.log('[STT Debug] stt-transcript ignored: isActive=', this.isActive, 'hasText=', !!(data && data.text));
          }
        });
 
@@ -359,8 +365,29 @@ class CallManager {
          }
        });
 
-       this.socket.on('stt-stream-ready', (data) => {
+      this.socket.on('stt-stream-ready', (data) => {
          console.log(`[Sarvam STT] Stream ready for ${data.speaker}`);
+       });
+
+       
+       this.socket.on('mobile-call-finished', (data) => {
+          if (this.isObserver && this.activePatient && data.patientId === this.activePatient.id) {
+             console.log('[Observer] Mobile call finished. Saving logs.');
+             const pt = window.CounselFlow.app.patients.find(p => p.id === data.patientId);
+             if (pt) {
+                pt.history.push(data.log);
+                if (window.CounselFlow.patchPatient) {
+                   window.CounselFlow.patchPatient(pt.id, { history: pt.history });
+                } else {
+                   window.CounselFlow.savePatients(window.CounselFlow.app.patients);
+                }
+             }
+             this.finalRecordingUrl = data.url;
+             this.lastSessionTranscript = data.transcript || [];
+             if (window.CounselFlow && window.CounselFlow.app) {
+                window.CounselFlow.app.saveCallLog(this.activePatient, "Mobile Call", this.duration, this.lastSessionTranscript, data.url, "Completed");
+             }
+          }
        });
 
        this.socket.on('stt-error', (data) => {
@@ -375,122 +402,79 @@ class CallManager {
   }
 
   // Init LiveKit for In-App Calling (App-to-App Architecture)
-  async initLiveKit(patient) {
-    if (!window.LivekitClient) {
-      window.CounselFlow.app.showToast('Error', 'LiveKit SDK not loaded', 'error');
-      return;
+  
+  async setupWebRTC(patient) {
+    console.log('[WebRTC] Initiating P2P Call to', patient.id);
+    
+    // Create standard WebRTC PeerConnection
+    const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+    this.peerConnection = new RTCPeerConnection(configuration);
+    
+    // Add local tracks
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(track => {
+        this.peerConnection.addTrack(track, this.localStream);
+      });
+      // Setup STT for local microphone
+      this.setupStreamingSTT(this.localStream, 'Counselor');
     }
 
-    try {
-      // The web dashboard no longer publishes its mic. It acts as an observer for ASR.
-      const roomName = `counselflow-room-${patient.id}`;
-      const participantName = `Dashboard-Observer-${Math.random().toString(36).substr(2, 5)}`;
-      
-      const resp = await fetch('/api/livekit/token', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + (localStorage.getItem('token') || ''),
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: JSON.stringify({ roomName, participantName, isCounselor: true }) // Still considered a counselor for JWT role
-      });
-      
-      const data = await resp.json();
-      if (!data.token) throw new Error(data.error || "Could not get LiveKit token");
-      
-      this.room = new LivekitClient.Room({
-        adaptiveStream: true,
-        dynacast: true,
-      });
-
-      this.room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-        if (track.kind === LivekitClient.Track.Kind.Audio || track.kind === 'audio') {
-          console.log('[LiveKit] Remote audio track subscribed from:', participant.name || participant.identity);
-          const element = track.attach();
-          document.body.appendChild(element);
-          if (typeof element.play === 'function') {
-            element.play().catch(e => {
-              console.warn('[LiveKit] Audio autoplay blocked:', e);
-              this.showAutoplayUnlockBanner();
-            });
-          }
-          
-          // Wire up Sarvam Streaming STT!
-          const stream = new MediaStream([track.mediaStreamTrack]);
-          const speakerName = (participant.name || "").toLowerCase().includes("counselor") ? "Counselor" : "Patient";
-          this.setupStreamingSTT(stream, speakerName);
-          
-          if (this.callRecordCtx && this.callRecordDest) {
-             try {
-               const remoteSource = this.callRecordCtx.createMediaStreamSource(stream);
-               remoteSource.connect(this.callRecordDest);
-             } catch(e) {}
-          }
-        }
-      });
-
-      this.room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-        track.detach();
-      });
-
-      this.room.on(LivekitClient.RoomEvent.ParticipantDisconnected, (participant) => {
-        console.log('[LiveKit] Participant disconnected:', participant.identity);
-        window.CounselFlow.app.showToast("Call Ended", "Participant ended the call.", "info");
-        this.endCall();
-      });
-
-      this.room.on(LivekitClient.RoomEvent.Disconnected, () => {
-        console.log('[LiveKit] Room disconnected.');
-        this.endCall();
-      });
-
-      // Connect to LiveKit Room
-      await this.room.connect(data.url, data.token);
-      console.log('[LiveKit] Connected to room as Dashboard Observer/Participant');
-
-      // Capture dashboard microphone so it actually records and can speak
-      try {
-        const localTracks = await window.LivekitClient.createLocalTracks({ audio: true, video: false });
-        for (const track of localTracks) {
-          await this.room.localParticipant.publishTrack(track);
-          // Connect dashboard audio to the recorder
-          if (this.callRecordCtx && this.callRecordDest) {
-            try {
-              const localStream = new MediaStream([track.mediaStreamTrack]);
-              const localSource = this.callRecordCtx.createMediaStreamSource(localStream);
-              localSource.connect(this.callRecordDest);
-            } catch(e) {
-              console.warn("Could not connect dashboard mic to recorder", e);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn("Could not capture dashboard microphone. Testing audio recording will be silent.", e);
+    // Handle incoming audio
+    this.peerConnection.ontrack = (event) => {
+      console.log('[WebRTC] Remote track received');
+      const remoteStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
+      if (this.remoteAudio) {
+        this.remoteAudio.srcObject = remoteStream;
       }
+      
+      // Wire up Sarvam Streaming STT!
+      const speakerName = "Patient";
+      this.setupStreamingSTT(remoteStream, speakerName);
+      
+      if (this.callRecordCtx && this.callRecordDest) {
+         try {
+           const remoteSource = this.callRecordCtx.createMediaStreamSource(remoteStream);
+           remoteSource.connect(this.callRecordDest);
+         } catch(e) {}
+      }
+    };
 
-      // 1. Notify patient mobile app to join room
+    // Handle ICE candidates
+    this.peerConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        if (this.patientAnswered && this.patientSocketId) {
+          this.socket.emit('ice-candidate', {
+            to: this.patientSocketId,
+            candidate: event.candidate
+          });
+        } else {
+          this.iceCandidateQueue.push(event.candidate);
+        }
+      }
+    };
+
+    this.peerConnection.onconnectionstatechange = () => {
+      console.log('[WebRTC] Connection state:', this.peerConnection.connectionState);
+      if (this.peerConnection.connectionState === 'failed' || this.peerConnection.connectionState === 'disconnected') {
+        // Fallback to relay
+        this.startSocketAudioRelay();
+      }
+    };
+
+    // Create and send offer
+    try {
+      const offer = await this.peerConnection.createOffer();
+      await this.peerConnection.setLocalDescription(offer);
+      
       this.socket.emit('call-user', {
-         to: patient.id,
-         offer: { type: 'livekit', roomName: roomName },
-         callerInfo: { name: "Dr. Amanpreet (Counselor)" }
+        to: patient.id,
+        offer: this.peerConnection.localDescription,
+        callerInfo: { name: "Dr. Amanpreet (Counselor)" }
       });
-      
-      // 2. Notify counselor mobile app to join room (Handoff)
-      const counselorId = patient.counselorId || "CO-101";
-      this.socket.emit('handoff-call', {
-         to: counselorId,
-         roomName: roomName,
-         patientName: patient.name
-      });
-      
-      window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via Patient Portal...`, "info");
-      
-    } catch (error) {
-      console.error("LiveKit Setup failed:", error);
-      this.endCall();
-      window.CounselFlow.app.showToast("Call Setup Failed", error.message || "Could not set up LiveKit audio.", "error");
-      throw error;
+      window.CounselFlow.app.showToast("Ringing", `Calling ${patient.name} via WebRTC...`, "info");
+    } catch (e) {
+      console.error('[WebRTC] Error creating offer', e);
+      throw e;
     }
   }
 
@@ -645,13 +629,24 @@ class CallManager {
     });
 
     // 2. Create an AudioContext at 16kHz to downsample browser audio (usually 48kHz)
-    let audioCtx;
-    try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    } catch (e) {
-      console.error(`[Sarvam STT] Failed to create AudioContext for ${speaker}:`, e);
-      return;
+    // If the previous context was closed (by stopAllStreamingSTT), discard it and create fresh
+    if (!window.globalSttAudioCtx || window.globalSttAudioCtx.state === 'closed') {
+      try {
+        window.globalSttAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        console.log(`[STT Debug] Created NEW AudioContext, state: ${window.globalSttAudioCtx.state}`);
+      } catch (e) {
+        console.error(`[Sarvam STT] Failed to create AudioContext for ${speaker}:`, e);
+        return;
+      }
     }
+    
+    if (window.globalSttAudioCtx.state === 'suspended') {
+      console.log(`[STT Debug] AudioContext suspended for ${speaker}, resuming...`);
+      window.globalSttAudioCtx.resume().catch(e => console.warn('[STT] Could not resume AudioContext', e));
+    }
+    
+    const audioCtx = window.globalSttAudioCtx;
+    console.log(`[STT Debug] Using AudioContext for ${speaker}, state: ${audioCtx.state}, sampleRate: ${audioCtx.sampleRate}`);
 
     const source = audioCtx.createMediaStreamSource(stream);
     
@@ -659,6 +654,9 @@ class CallManager {
     const processor = audioCtx.createScriptProcessor(4096, 1, 1);
     
     this.sttStreamsActive[speaker] = true;
+
+    // Debug: count chunks emitted per speaker
+    let chunkCount = 0;
 
     processor.onaudioprocess = (e) => {
       if (!this.isActive || !this.sttStreamsActive[speaker]) return;
@@ -687,12 +685,21 @@ class CallManager {
         speaker: speaker,
         audio: base64Audio
       });
+
+      chunkCount++;
+      if (chunkCount % 20 === 1) {
+        console.log(`[STT Debug] ${speaker}: emitted ${chunkCount} chunks, ctxState=${audioCtx.state}`);
+      }
     };
 
     source.connect(processor);
-    processor.connect(audioCtx.destination); // Required for ScriptProcessor to fire
-
-    // Store references for cleanup
+    
+    // Connect to a muted gain node to prevent echo but keep processor alive
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0;
+    processor.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+    
     this.sttAudioContexts[speaker] = audioCtx;
     this.sttProcessors[speaker] = processor;
 
@@ -704,17 +711,22 @@ class CallManager {
     for (const speaker of Object.keys(this.sttStreamsActive)) {
       this.sttStreamsActive[speaker] = false;
       
-      // Disconnect AudioContext processor
+      // Disconnect ScriptProcessorNode (but don't close the shared AudioContext yet)
       if (this.sttProcessors[speaker]) {
         try { this.sttProcessors[speaker].disconnect(); } catch (e) {}
         delete this.sttProcessors[speaker];
       }
-      if (this.sttAudioContexts[speaker]) {
-        try { this.sttAudioContexts[speaker].close(); } catch (e) {}
-        delete this.sttAudioContexts[speaker];
-      }
+      // Remove per-speaker reference (don't close — it's the shared global ctx)
+      delete this.sttAudioContexts[speaker];
     }
     this.sttStreamsActive = {};
+
+    // Close and null the shared AudioContext so a fresh one is created next call
+    if (window.globalSttAudioCtx) {
+      try { window.globalSttAudioCtx.close(); } catch (e) {}
+      window.globalSttAudioCtx = null;
+      console.log('[STT Debug] Shared globalSttAudioCtx closed and nulled for clean next-call creation.');
+    }
 
     // Tell server to close all Sarvam streams for this socket
     if (this.socket) {
@@ -724,9 +736,9 @@ class CallManager {
   }
 
   // Issue 1: Missing startInteractiveDemo Method
-  startInteractiveDemo() {
+  startInteractiveDemo(demoPatientParam, demoLang = 'en-US') {
     console.log("[CallManager] Starting interactive demo...");
-    const demoPatient = {
+    const demoPatient = demoPatientParam || {
       id: "DEMO-001",
       name: "Interactive Demo Patient",
       severity: "Medium",
@@ -735,7 +747,7 @@ class CallManager {
       addictionCategory: "Opioid (Heroin)"
     };
     window.CounselFlow.app.switchScreen('call-console');
-    this.startCall(demoPatient);
+    this.startCall(demoPatient, demoLang, "Outbound", true);
   }
 
   // Live Transcription is now triggered directly by LiveKit track subscriptions
@@ -1089,8 +1101,20 @@ class CallManager {
 
 
   // Begin Tele-Counseling session call
-  async startCall(patient, languageCode, direction = "Outbound") {
+  async startCall(patient, languageCode, direction = "Outbound", isDemo = false) {
     if (this.isActive) return;
+    
+    // Pre-create/resume global STT AudioContext synchronously within user gesture to bypass browser autoplay block
+    if (!window.globalSttAudioCtx || window.globalSttAudioCtx.state === 'closed') {
+      try {
+        window.globalSttAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        console.log(`[STT Debug] Pre-created AudioContext in user gesture, state: ${window.globalSttAudioCtx.state}`);
+      } catch (e) {
+        console.error(`[Sarvam STT] Failed to pre-create AudioContext in user gesture:`, e);
+      }
+    } else if (window.globalSttAudioCtx.state === 'suspended') {
+      window.globalSttAudioCtx.resume().catch(e => console.warn('[STT] Could not pre-resume global AudioContext:', e));
+    }
     
     this.isActive = true;
     this.isMuted = false;
@@ -1113,16 +1137,31 @@ class CallManager {
       audioContainer.innerHTML = '';
     }
     
-    // Gate call recording by patient consent status (Phase 2, Solution Scope #3)
-    this.isRecording = patient.consentCaptured !== false && patient.consent !== false;
+    // Gate call recording by patient consent status    // Require explicit consent to record, unless in interactive demo
+    this.isRecording = isDemo || (patient.consentCaptured !== false && patient.consent !== false);
 
     if (this.isRecording) {
       this.setupCallRecorder();
     }
 
-    // Initiate LiveKit Call (Replaces WebRTC)
+    // Acquire microphone for WebRTC and STT
+    if (!isDemo) {
+      try {
+        this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log('[WebRTC] Microphone acquired:', this.localStream.getTracks().length, 'tracks');
+      } catch (e) {
+        console.error('[WebRTC] Microphone access denied:', e);
+        if (window.CounselFlow && window.CounselFlow.app) {
+          window.CounselFlow.app.showToast('Microphone Error', 'Microphone access denied. Please allow microphone access and try again.', 'error');
+        }
+        this.isActive = false;
+        return;
+      }
+    }
+
+    // Initiate WebRTC Call
     try {
-      await this.initLiveKit(patient);
+      await this.setupWebRTC(patient);
     } catch (e) {
       return; // initLiveKit already called endCall() and showed a toast
     }
@@ -1307,12 +1346,11 @@ class CallManager {
        try { this.fullCallRecorder.stop(); } catch(e) {}
      }
 
-     // Remove audio unlock handlers
-     if (this.audioUnlockHandler) {
-       document.removeEventListener('click', this.audioUnlockHandler);
-       document.removeEventListener('touchstart', this.audioUnlockHandler);
-       document.removeEventListener('keydown', this.audioUnlockHandler);
-     }
+     // NOTE: Do NOT remove audioUnlockHandler here.
+     // These listeners are registered once in the constructor and must persist
+     // across multiple call sessions. Removing them here caused AudioContext
+     // resume failures on the 2nd+ call because suspended contexts could
+     // never be unlocked by user gesture.
 
      // Stop socket audio relay if active
     this.stopSocketAudioRelay();
@@ -1393,7 +1431,11 @@ class CallManager {
          const ptRef = window.CounselFlow.app.patients.find(p => p.id === patient.id);
          if (ptRef) {
            ptRef.cbmContacts = patient.cbmContacts;
-           await window.CounselFlow.savePatients(window.CounselFlow.app.patients);
+           if (window.CounselFlow.patchPatient) {
+             await window.CounselFlow.patchPatient(patient.id, { cbmContacts: ptRef.cbmContacts });
+           } else {
+             await window.CounselFlow.savePatients(window.CounselFlow.app.patients);
+           }
          }
       }
 
@@ -1787,7 +1829,9 @@ class CallManager {
          }
          
          try {
-           const token = window.localStorage.getItem('counseling_logged_in_token') || localStorage.getItem('token') || '';
+            const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') 
+              ? (window.CounselFlow.safeGetItem('counseling_logged_in_token') || window.CounselFlow.safeGetItem('token') || '')
+              : '';
            const headers = {};
            if (token) headers['Authorization'] = 'Bearer ' + token;
            const res = await fetch('/api/upload-recording', {

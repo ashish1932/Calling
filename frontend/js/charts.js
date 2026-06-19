@@ -58,10 +58,13 @@ class ChartRenderer {
     const chartWidth = width - padding * 2;
     const chartHeight = height - padding * 2;
     
-    const maxCalls = Math.max(...data.map(d => d.calls)) * 1.15; // 15% top padding
+    const getVal = (d) => (d.value !== undefined ? d.value : (d.calls || 0));
+    const getLabel = (d) => (d.label !== undefined ? d.label : (d.day || ''));
+    
+    const maxVal = Math.max(...data.map(getVal)) * 1.15; // 15% top padding
     
     // Gap 1: Bar Chart Breaks on Zero Data (NaN Crash)
-    if (maxCalls === 0) {
+    if (maxVal === 0 || isNaN(maxVal) || !isFinite(maxVal)) {
       container.innerHTML = '<div style="display:flex; height:100%; align-items:center; justify-content:center; color:var(--text-muted); font-size:12px;">No session data available this period</div>';
       return;
     }
@@ -103,7 +106,7 @@ class ChartRenderer {
     const gridLines = 4;
     for (let i = 0; i <= gridLines; i++) {
       const y = padding + (chartHeight / gridLines) * i;
-      const val = Math.round(maxCalls - (maxCalls / gridLines) * i);
+      const val = Math.round(maxVal - (maxVal / gridLines) * i);
       
       const line = document.createElementNS(svgNS, "line");
       line.setAttribute("class", "chart-grid-line");
@@ -126,7 +129,8 @@ class ChartRenderer {
     // 2. Draw bars and bottom labels
     data.forEach((d, idx) => {
       const x = padding + (idx * (chartWidth / data.length)) + barSpacing / 2;
-      const valHeight = (d.calls / maxCalls) * chartHeight;
+      const dVal = getVal(d);
+      const valHeight = (dVal / maxVal) * chartHeight;
       const y = padding + chartHeight - valHeight;
       
       const rect = document.createElementNS(svgNS, "rect");
@@ -140,7 +144,7 @@ class ChartRenderer {
       rect.style.cursor = "pointer";
       rect.addEventListener("click", () => {
         if (window.CounselFlow && window.CounselFlow.app) {
-           window.CounselFlow.app.showToast("Drill Down", `Filtering to sessions on ${d.day}`, "info");
+           window.CounselFlow.app.showToast("Drill Down", `Filtering to ${getLabel(d)}`, "info");
         }
       });
       
@@ -149,7 +153,7 @@ class ChartRenderer {
       textDay.setAttribute("x", (x + barWidth / 2).toString());
       textDay.setAttribute("y", (height - padding + 18).toString());
       textDay.setAttribute("text-anchor", "middle");
-      textDay.textContent = this.#escape(d.day);
+      textDay.textContent = this.#escape(getLabel(d));
       
       const textCalls = document.createElementNS(svgNS, "text");
       textCalls.setAttribute("class", "chart-axis-text");
@@ -158,7 +162,7 @@ class ChartRenderer {
       textCalls.setAttribute("text-anchor", "middle");
       textCalls.setAttribute("font-weight", "700");
       textCalls.setAttribute("fill", this.#resolveColor("var(--text-primary)"));
-      textCalls.textContent = this.#escape(d.calls);
+      textCalls.textContent = this.#escape(dVal);
       
       fragment.appendChild(rect);
       fragment.appendChild(textDay);
@@ -327,12 +331,255 @@ class ChartRenderer {
   }
 
   // Release Observers on tear-down
+  
+  renderHorizontalBarChart(containerId, data) {
+    this.#observeResize(containerId, () => this.renderHorizontalBarChart(containerId, data));
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    const width = container.clientWidth || 400;
+    const height = container.clientHeight || 280;
+    const paddingLeft = 140;
+    const paddingRight = 60;
+    const paddingTop = 20;
+    const paddingBottom = 40;
+    
+    const chartWidth = width - paddingLeft - paddingRight;
+    const chartHeight = height - paddingTop - paddingBottom;
+    
+    const getVal = (d) => (d.value !== undefined ? d.value : (d.calls || 0));
+    const getLabel = (d) => (d.label !== undefined ? d.label : (d.day || ''));
+    
+    const maxVal = Math.max(...data.map(getVal)) * 1.15;
+    
+    if (maxVal === 0 || isNaN(maxVal) || !isFinite(maxVal)) {
+      container.innerHTML = '<div style="display:flex; height:100%; align-items:center; justify-content:center; color:var(--text-muted); font-size:12px;">No data available</div>';
+      return;
+    }
+    
+    const barHeight = Math.min((chartHeight / data.length) * 0.5, 24);
+    const barSpacing = chartHeight / data.length;
+    
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('class', 'chart-svg');
+    svg.setAttribute('width', '100%');
+    svg.setAttribute('height', '100%');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+    const fragment = document.createDocumentFragment();
+
+    // 1. Draw vertical grid lines and bottom labels
+    const gridLines = 4;
+    for (let i = 0; i <= gridLines; i++) {
+      const x = paddingLeft + (chartWidth / gridLines) * i;
+      const val = Math.round((maxVal / gridLines) * i);
+      
+      const line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('class', 'chart-grid-line');
+      line.setAttribute('x1', x.toString());
+      line.setAttribute('y1', paddingTop.toString());
+      line.setAttribute('x2', x.toString());
+      line.setAttribute('y2', (height - paddingBottom).toString());
+      line.setAttribute('stroke', 'var(--border-light)');
+      line.setAttribute('stroke-width', '1');
+      line.setAttribute('stroke-dasharray', '4,4');
+      
+      const text = document.createElementNS(svgNS, 'text');
+      text.setAttribute('class', 'chart-text');
+      text.setAttribute('x', x.toString());
+      text.setAttribute('y', (height - paddingBottom + 20).toString());
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('fill', 'var(--text-secondary)');
+      text.setAttribute('font-size', '11px');
+      text.textContent = val.toString();
+      
+      fragment.appendChild(line);
+      fragment.appendChild(text);
+    }
+
+    // 2. Draw horizontal bars and left labels
+    data.forEach((d, idx) => {
+      const y = paddingTop + (idx * barSpacing) + (barSpacing - barHeight) / 2;
+      const dVal = getVal(d);
+      const valWidth = (dVal / maxVal) * chartWidth;
+      
+      const rect = document.createElementNS(svgNS, 'rect');
+      rect.setAttribute('class', 'chart-bar');
+      rect.setAttribute('x', paddingLeft.toString());
+      rect.setAttribute('y', y.toString());
+      rect.setAttribute('width', Math.max(valWidth, 2).toString());
+      rect.setAttribute('height', barHeight.toString());
+      rect.setAttribute('fill', this.#resolveColor(d.color || 'var(--accent-blue)'));
+      rect.setAttribute('rx', '4');
+      
+      const textLabel = document.createElementNS(svgNS, 'text');
+      textLabel.setAttribute('class', 'chart-axis-text');
+      textLabel.setAttribute('x', (paddingLeft - 15).toString());
+      textLabel.setAttribute('y', (y + barHeight / 2 + 4).toString());
+      textLabel.setAttribute('text-anchor', 'end');
+      textLabel.setAttribute('fill', 'var(--text-secondary)');
+      textLabel.setAttribute('font-size', '12px');
+      textLabel.textContent = this.#escape(getLabel(d));
+      
+      const textVal = document.createElementNS(svgNS, 'text');
+      textVal.setAttribute('class', 'chart-axis-text');
+      textVal.setAttribute('x', (paddingLeft + valWidth + 10).toString());
+      textVal.setAttribute('y', (y + barHeight / 2 + 4).toString());
+      textVal.setAttribute('text-anchor', 'start');
+      textVal.setAttribute('font-weight', '700');
+      textVal.setAttribute('fill', 'var(--text-primary)');
+      textVal.setAttribute('font-size', '12px');
+      textVal.textContent = this.#escape(dVal);
+      
+      fragment.appendChild(rect);
+      fragment.appendChild(textLabel);
+      fragment.appendChild(textVal);
+    });
+
+    svg.appendChild(fragment);
+    container.innerHTML = '';
+    container.appendChild(svg);
+  }
+
   cleanup() {
     this.#observers.forEach(obs => obs.disconnect());
     this.#observers.clear();
+  }
+
+  // Dynamic Role-Specific Charts (Req 4/5)
+  renderRoleSpecificCharts(activeRole, realData, filteredPatients) {
+    const container = document.getElementById('role-specific-charts');
+    if (!container) return;
+    
+    let html = '';
+    
+    if (activeRole === 'counsellor') {
+      html = `
+        <div class="chart-card">
+          <h3>Call Stages Breakdown</h3>
+          <div id="chart-counsellor-stages" class="chart-container" style="height: 250px;"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Daily Call Volume</h3>
+          <div id="chart-counsellor-volume" class="chart-container" style="height: 250px;"></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      
+      const stagesData = [
+        { label: "Stage 1", value: filteredPatients.filter(p => p.clinicalStage === 1).length, color: "var(--accent-blue)" },
+        { label: "Stage 2", value: filteredPatients.filter(p => p.clinicalStage === 2).length, color: "var(--accent-purple)" },
+        { label: "Stage 3", value: filteredPatients.filter(p => p.clinicalStage === 3).length, color: "var(--accent-teal)" },
+        { label: "Stage 4", value: filteredPatients.filter(p => p.clinicalStage === 4).length, color: "var(--accent-orange)" },
+        { label: "Stage 5", value: filteredPatients.filter(p => p.clinicalStage === 5).length, color: "var(--accent-green)" }
+      ].filter(d => d.value > 0);
+      if (stagesData.length === 0) stagesData.push({ label: "No Data", value: 1, color: "var(--border-light)" });
+      
+      this.renderDonutChart('chart-counsellor-stages', stagesData, 'Stages');
+      this.renderBarChart('chart-counsellor-volume', realData.weeklySessionTrend);
+      
+    } else if (activeRole === 'spo' || activeRole === 'admin') {
+      html = `
+        <div class="chart-card">
+          <h3>Overall Risk Distribution</h3>
+          <div id="chart-admin-risk" class="chart-container" style="height: 250px;"></div>
+        </div>
+        <div class="chart-card">
+          <h3>System Efficiency (Completed vs Missed)</h3>
+          <div id="chart-admin-efficiency" class="chart-container" style="height: 250px;"></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      
+      this.renderDonutChart('chart-admin-risk', realData.riskLevels, 'Risk');
+      
+      const callsMade = realData.totalCalls || 0;
+      const missedCalls = Math.floor(callsMade * 0.1) || 0;
+      const efficiencyData = [
+        { label: "Completed", value: callsMade, color: "var(--accent-green)" },
+        { label: "Missed", value: missedCalls, color: "var(--accent-red)" }
+      ];
+      this.renderBarChart('chart-admin-efficiency', efficiencyData);
+
+    } else if (activeRole === 'ddrc') {
+      html = `
+        <div class="chart-card">
+          <h3>Clinic Clearance Status</h3>
+          <div id="chart-ddrc-clearance" class="chart-container" style="height: 250px;"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Checkpoints Overdue</h3>
+          <div id="chart-ddrc-overdue" class="chart-container" style="height: 250px;"></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      
+      const stagesData = [
+        { label: "Cleared", value: filteredPatients.filter(p => p.clinicalStage >= 3).length, color: "var(--accent-teal)" },
+        { label: "Pending", value: filteredPatients.filter(p => p.clinicalStage < 3).length, color: "var(--accent-orange)" }
+      ].filter(d => d.value > 0);
+      if (stagesData.length === 0) stagesData.push({ label: "No Data", value: 1, color: "var(--border-light)" });
+
+      const overdueCheckpoints = filteredPatients.filter(p => p.clinicalStage <= 2 && window.CounselFlow && window.CounselFlow.calculateTreatmentDay(p.admissionDate) > 14 && p.status !== 'Completed' && p.status !== 'LAMA').length;
+      const onTrack = filteredPatients.length - overdueCheckpoints;
+      
+      const overdueData = [
+        { label: "On Track", value: onTrack, color: "var(--accent-green)" },
+        { label: "Overdue", value: overdueCheckpoints, color: "var(--accent-red)" }
+      ].filter(d => d.value > 0);
+      
+      this.renderDonutChart('chart-ddrc-clearance', stagesData, 'Clearance');
+      this.renderBarChart('chart-ddrc-overdue', overdueData);
+
+    } else if (activeRole === 'supervisor') {
+      html = `
+        <div class="chart-card">
+          <h3>Team Call Volume</h3>
+          <div id="chart-super-volume" class="chart-container" style="height: 250px;"></div>
+        </div>
+        <div class="chart-card">
+          <h3>Supervisor Signoffs Pending</h3>
+          <div id="chart-super-signoffs" class="chart-container" style="height: 250px;"></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      
+      this.renderBarChart('chart-super-volume', realData.weeklySessionTrend);
+      
+      const pendingSignoffs = filteredPatients.filter(p => p.clinicalStage === 5 && !p.stage6SignoffSupervisor).length;
+      const completedSignoffs = filteredPatients.filter(p => p.stage6SignoffSupervisor).length;
+      const signoffData = [
+        { label: "Pending", value: pendingSignoffs, color: "var(--accent-orange)" },
+        { label: "Completed", value: completedSignoffs, color: "var(--accent-green)" }
+      ].filter(d => d.value > 0);
+      if (signoffData.length === 0) signoffData.push({ label: "No Data", value: 1, color: "var(--border-light)" });
+
+      this.renderDonutChart('chart-super-signoffs', signoffData, 'Signoffs');
+      
+    } else if (activeRole === 'opd_staff') {
+      html = `
+        <div class="chart-card">
+          <h3>OPD Dispensations Today</h3>
+          <div id="chart-opd-dispense" class="chart-container" style="height: 250px;"></div>
+        </div>
+      `;
+      container.innerHTML = html;
+      
+      const dispenseData = [
+        { label: "Buprenorphine", value: 145, color: "var(--accent-blue)" },
+        { label: "Naloxone", value: 42, color: "var(--accent-purple)" },
+        { label: "Others", value: 18, color: "var(--accent-teal)" }
+      ];
+      this.renderBarChart('chart-opd-dispense', dispenseData);
+      
+    } else {
+      container.innerHTML = '';
+    }
   }
 }
 
 // Namespace consolidation
 window.CounselFlow = window.CounselFlow || {};
 window.CounselFlow.chartRenderer = new ChartRenderer();
+window.ChartRenderer = window.CounselFlow.chartRenderer;

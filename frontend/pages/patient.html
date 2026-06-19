@@ -862,7 +862,7 @@
     }
 
     // Mood tracking logic
-    const moodLogs = JSON.parse(localStorage.getItem('mood_logs') || '[]');
+    const moodLogs = JSON.parse((window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function' ? window.CounselFlow.safeGetItem('mood_logs') : null) || '[]');
     function logMood(mood) {
       const entry = {
         mood: mood,
@@ -870,7 +870,11 @@
       };
       moodLogs.unshift(entry);
       if (moodLogs.length > 5) moodLogs.pop();
-      localStorage.setItem('mood_logs', JSON.stringify(moodLogs));
+      if (window.CounselFlow && typeof window.CounselFlow.safeSetItem === 'function') {
+        window.CounselFlow.safeSetItem('mood_logs', JSON.stringify(moodLogs));
+      } else {
+        try { localStorage.setItem('mood_logs', JSON.stringify(moodLogs)); } catch(e) {}
+      }
       renderMoodHistory();
     }
 
@@ -937,6 +941,92 @@
       syntheticRingNotes = [];
     }
 
+    // STT & Recording Logic global variables (Scope fix)
+    let sttAudioContexts = {};
+    let sttProcessors = {};
+    let fullCallRecorder = null;
+    let callRecordCtx = null;
+    let callRecordDest = null;
+    let callTranscript = [];
+    let globalAudioCtx = null;
+
+    // ASR/STT setup defined globally
+    function setupStreamingSTT(stream, speaker) {
+      if (!stream || !socket) return;
+      
+      const langMap = { en: 'en-IN', pa: 'pa-IN', hi: 'hi-IN' };
+      const language = langMap[selectedLanguage] || 'en-US';
+
+      socket.emit('start-stt-stream', {
+        speaker: speaker,
+        language: language,
+        mode: 'codemix'
+      });
+
+      if (!globalAudioCtx) {
+        try {
+          globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        } catch (e) {
+          console.error('[STT] Failed to create AudioContext:', e);
+          return;
+        }
+      }
+      
+      if (globalAudioCtx.state === 'suspended') {
+        globalAudioCtx.resume().catch(e => console.error('[STT] Failed to resume AudioContext:', e));
+      }
+
+      const source = globalAudioCtx.createMediaStreamSource(stream);
+      const processor = globalAudioCtx.createScriptProcessor(4096, 1, 1);
+
+      processor.onaudioprocess = (e) => {
+        const float32 = e.inputBuffer.getChannelData(0);
+        const int16 = new Int16Array(float32.length);
+        for (let i = 0; i < float32.length; i++) {
+          const s = Math.max(-1, Math.min(1, float32[i]));
+          int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        const uint8 = new Uint8Array(int16.buffer);
+        let binary = '';
+        for (let i = 0; i < uint8.length; i++) {
+          binary += String.fromCharCode(uint8[i]);
+        }
+        socket.emit('stt-audio-chunk', { speaker, audio: btoa(binary) });
+      };
+
+      source.connect(processor);
+      
+      // Connect to a muted gain node to prevent echo but keep processor alive
+      const gainNode = globalAudioCtx.createGain();
+      gainNode.gain.value = 0;
+      processor.connect(gainNode);
+      gainNode.connect(globalAudioCtx.destination);
+      
+      sttAudioContexts[speaker] = globalAudioCtx;
+      sttProcessors[speaker] = processor;
+    }
+
+    // Unlock autoplay trigger for remote audio stream
+    const audioUnlockHandler = () => {
+      const remoteAudioEl = document.getElementById('remoteAudio');
+      if (remoteAudioEl && (remoteAudioEl.srcObject || remoteAudioEl.src)) {
+        if (typeof remoteAudioEl.play === 'function' && remoteAudioEl.paused) {
+          remoteAudioEl.play().then(() => {
+            console.log('[Audio] Unlocked remote audio stream');
+            const statusText = document.getElementById('audioStatus');
+            if (statusText && statusText.innerText.includes('Tap/click')) {
+              statusText.innerText = '🟢 Call connected (P2P)';
+            }
+          }).catch(e => console.warn('[Audio] Autoplay unlock failed:', e));
+        }
+      }
+      if (globalAudioCtx && globalAudioCtx.state === 'suspended') {
+        globalAudioCtx.resume().catch(e => console.warn('[STT] Failed to resume AudioContext:', e));
+      }
+    };
+    document.addEventListener('click', audioUnlockHandler);
+    document.addEventListener('touchstart', audioUnlockHandler);
+
     // Signaling server connection
     async function handleRegister() {
       patientId = document.getElementById('patientIdInput').value.trim();
@@ -947,7 +1037,8 @@
 
       document.getElementById('dashPatientId').innerText = patientId;
       
-      const serverUrl = 'https://telecalling.cubegtp.com';
+      // Dynamically resolve server origin for localhost/ngrok compatibility
+      const serverUrl = window.location.origin;
 
       try {
         const langMap = { en: 'en-US', pa: 'pa-IN', hi: 'hi-IN' };
@@ -960,7 +1051,11 @@
         if (res.ok) {
           const data = await res.json();
           if (data.token) {
-            window.localStorage.setItem('counseling_logged_in_token', data.token);
+            if (window.CounselFlow && typeof window.CounselFlow.safeSetItem === 'function') {
+              window.CounselFlow.safeSetItem('counseling_logged_in_token', data.token);
+            } else {
+              try { window.localStorage.setItem('counseling_logged_in_token', data.token); } catch(e) {}
+            }
             if (window.CounselFlow && window.CounselFlow.getStoredPatients) {
               const patients = await window.CounselFlow.getStoredPatients();
               const p = patients.find(x => x.id === patientId);
@@ -978,7 +1073,7 @@
 
       showView('viewDashboard');
 
-      socket = io(serverUrl, { transports: ['websocket', 'polling'] });
+      socket = io(serverUrl, { transports: ['polling', 'websocket'] });
 
       socket.on('connect', () => {
         console.log('Connected to signaling server:', socket.id);
@@ -1029,6 +1124,17 @@
           // Queue it — will be flushed after setRemoteDescription in acceptCall()
           iceCandidateBuffer.push(data.candidate);
           console.log('[ICE] Buffered candidate, total:', iceCandidateBuffer.length);
+        }
+      });
+
+      
+      socket.on('stt-transcript', (data) => {
+        if (data && data.text) {
+           const sender = data.speaker === 'Counselor' ? 'counselor' : 'patient';
+           const tData = { sender, text: data.text };
+           callTranscript.push({ speaker: data.speaker, text: data.text, timestamp: new Date() });
+           renderTranscriptLine(tData);
+           socket.emit('transcript-update', { ...tData, to: activeCounselorSocket });
         }
       });
 
@@ -1093,6 +1199,24 @@
           const remoteAudioEl = document.getElementById('remoteAudio');
           const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
           remoteAudioEl.srcObject = stream;
+
+          // Route remote audio to call recording if active
+          if (callRecordCtx && callRecordDest) {
+            try {
+              const remoteSrc = callRecordCtx.createMediaStreamSource(stream);
+              remoteSrc.connect(callRecordDest);
+            } catch(e) {
+              console.warn('[Recorder] Failed to route remote audio to recording destination:', e);
+            }
+          }
+
+          // Start STT for Counselor independently
+          try {
+            setupStreamingSTT(stream, 'Counselor');
+          } catch(e) {
+            console.error('[STT] Failed to setup remote stream transcription:', e);
+          }
+
           remoteAudioEl.play().catch(e => {
             console.warn('[Audio] Autoplay blocked — user interaction required:', e);
             document.getElementById('audioStatus').innerText = '⚠️ Tap/click anywhere to enable audio';
@@ -1109,41 +1233,57 @@
           }
         };
 
-        localStream.getTracks().forEach(track => {
-          peerConnection.addTrack(track, localStream);
-        });
+        localStream.getTracks().forEach(track => { peerConnection.addTrack(track, localStream); });
 
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(currentOffer));
-
-        // BUG FIX #1: Flush any ICE candidates that arrived before this point
-        remoteDescSet = true;
-        console.log('[ICE] Flushing', iceCandidateBuffer.length, 'buffered candidates');
-        for (const candidate of iceCandidateBuffer) {
-          try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {
-            console.warn('[ICE] Buffered candidate add failed:', e.message);
-          }
+        // Start STT for Patient independently of recorder compatibility
+        try {
+          setupStreamingSTT(localStream, 'Patient');
+        } catch(e) {
+          console.error('[STT] Failed to setup local stream transcription:', e);
         }
-        iceCandidateBuffer = [];
 
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        socket.emit('make-answer', {
-          to: activeCounselorSocket,
-          answer: answer
-        });
-
+        // Setup Call Recording (Non-blocking: will catch errors on unsupported browsers like iOS Safari)
+        try {
+          callRecordCtx = new (window.AudioContext || window.webkitAudioContext)();
+          callRecordDest = callRecordCtx.createMediaStreamDestination();
+          
+          let options = { mimeType: 'audio/webm;codecs=opus' };
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'audio/webm' };
+          
+          fullCallRecorder = new MediaRecorder(callRecordDest.stream, options);
+          const recordedChunks = [];
+          
+          fullCallRecorder.ondataavailable = (e) => {
+             if (e.data.size > 0) recordedChunks.push(e.data);
+          };
+          
+          fullCallRecorder.onstop = async () => {
+             const blob = new Blob(recordedChunks, { type: options.mimeType });
+             const formData = new FormData();
+             formData.append('audio', blob, `patient_call.webm`);
+             try {
+                const resp = await fetch('/api/upload-recording', { method: 'POST', body: formData });
+                const resData = await resp.json();
+                if (resData.url) {
+                   console.log('Uploaded recording to secure server:', resData.url);
+                   socket.emit('mobile-call-finished', { url: resData.url, transcript: callTranscript, patientId: patientId });
+                }
+             } catch(e) { console.error('Upload failed', e); }
+          };
+          
+          const localSrc = callRecordCtx.createMediaStreamSource(localStream);
+          localSrc.connect(callRecordDest);
+          fullCallRecorder.start();
+        } catch (e) {
+          console.warn('[Recorder] Call recording setup failed:', e);
+        }
       } catch (err) {
-        console.error('Failed to establish WebRTC call:', err);
-        alert('Could not start microphone call. Please grant permissions and retry.');
-        declineCall();
+        console.error('Failed to accept call:', err);
+        handleCallTermination();
       }
     }
 
     function declineCall() {
-      stopRingtone();
       if (socket && activeCounselorSocket) {
         socket.emit('reject-call', { to: activeCounselorSocket });
       }
@@ -1158,6 +1298,14 @@
     }
 
     function handleCallTermination() {
+
+      if (fullCallRecorder && fullCallRecorder.state !== 'inactive') {
+        fullCallRecorder.stop();
+      }
+      for (const sp in sttAudioContexts) {
+         try { sttProcessors[sp].disconnect(); sttAudioContexts[sp].close(); } catch(e){}
+      }
+
       stopCallTimer();
       stopRingtone();
       

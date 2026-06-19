@@ -264,7 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let local = [];
     try {
       if (navigator.onLine) {
-        const token = window.localStorage.getItem('counseling_logged_in_token');
+        const token = window.CounselFlow.safeGetItem('counseling_logged_in_token');
         const headers = { 'X-Requested-With': 'XMLHttpRequest' };
         if (token) headers['Authorization'] = `Bearer ${token}`;
         
@@ -304,10 +304,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function saveLocalCounselor(data) {
      if (navigator.onLine) {
        try {
-         const token = window.localStorage.getItem('counseling_logged_in_token');
+         const token = window.CounselFlow.safeGetItem('counseling_logged_in_token');
          const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
          if (token) headers['Authorization'] = `Bearer ${token}`;
-
+ 
          await fetch(`${window.CounselFlow.API_BASE}/counselors`, {
            method: 'POST',
            headers: headers,
@@ -322,10 +322,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function deleteLocalCounselor(id) {
      if (navigator.onLine) {
        try {
-         const token = window.localStorage.getItem('counseling_logged_in_token');
+         const token = window.CounselFlow.safeGetItem('counseling_logged_in_token');
          const headers = { 'X-Requested-With': 'XMLHttpRequest' };
          if (token) headers['Authorization'] = `Bearer ${token}`;
-
+ 
          await fetch(`${window.CounselFlow.API_BASE}/counselors/${id}`, {
            method: 'DELETE',
            headers: headers

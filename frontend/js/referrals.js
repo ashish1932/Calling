@@ -4,7 +4,9 @@ class ReferralEngine {
   }
 
   async createReferral(patientId, targetRole, urgency, notes) {
-    const token = window.localStorage.getItem('counseling_token');
+    const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+      ? window.CounselFlow.safeGetItem('counseling_token')
+      : null;
     if (!token) return null;
     
     try {
@@ -24,7 +26,9 @@ class ReferralEngine {
   }
 
   async getMyReferrals() {
-    const token = window.localStorage.getItem('counseling_token');
+    const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+      ? window.CounselFlow.safeGetItem('counseling_token')
+      : null;
     if (!token) return [];
 
     try {
@@ -39,7 +43,9 @@ class ReferralEngine {
   }
 
   async updateReferralStatus(referralId, status) {
-    const token = window.localStorage.getItem('counseling_token');
+    const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+      ? window.CounselFlow.safeGetItem('counseling_token')
+      : null;
     if (!token) return null;
 
     try {

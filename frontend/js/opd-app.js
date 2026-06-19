@@ -73,7 +73,9 @@ window.initOpdDashboard = function() {
   };
 
   const getAuthHeaders = () => {
-    const token = window.localStorage.getItem('counseling_logged_in_token') || '';
+    const token = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') 
+      ? window.CounselFlow.safeGetItem('counseling_logged_in_token') 
+      : (window.localStorage.getItem('counseling_logged_in_token') || '');
     return {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${token}`
@@ -813,12 +815,13 @@ window.initOpdDashboard = function() {
       document.getElementById('btn-logout-cancel').addEventListener('click', () => overlay.remove());
       overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
       document.getElementById('btn-logout-confirm').addEventListener('click', () => {
-        window.localStorage.removeItem('counseling_logged_in_token');
-        if (window.CounselFlow && window.CounselFlow.safeSetItem) {
+        if (window.CounselFlow && window.CounselFlow.safeRemoveItem) {
+          window.CounselFlow.safeRemoveItem('counseling_logged_in_token');
           window.CounselFlow.safeSetItem('counseling_active_role', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_name', '');
           window.CounselFlow.safeSetItem('counseling_logged_in_staff', '');
         } else {
+          window.localStorage.removeItem('counseling_logged_in_token');
           window.localStorage.removeItem('counseling_active_role');
           window.localStorage.removeItem('counseling_logged_in_name');
           window.localStorage.removeItem('counseling_logged_in_staff');
@@ -827,21 +830,25 @@ window.initOpdDashboard = function() {
       });
     });
   }
-
+ 
   // Initialize dynamic sidebar profile
   const initializeSidebarProfile = () => {
     if (!window.CounselFlow) return;
-
-    const loggedInName = window.localStorage.getItem('counseling_logged_in_name') || window.CounselFlow.safeGetItem('counseling_logged_in_name') || 'OPD Coordinator';
-    const activeRoleKey = window.localStorage.getItem('counseling_active_role') || window.CounselFlow.safeGetItem('counseling_active_role') || 'opd_staff';
+ 
+    const loggedInName = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') 
+      ? window.CounselFlow.safeGetItem('counseling_logged_in_name') 
+      : (window.localStorage.getItem('counseling_logged_in_name') || 'OPD Coordinator');
+    const activeRoleKey = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') 
+      ? window.CounselFlow.safeGetItem('counseling_active_role') 
+      : (window.localStorage.getItem('counseling_active_role') || 'opd_staff');
     
     const roles = window.CounselFlow.ROLES || {};
     const role = roles[activeRoleKey] || { label: 'OPD Medication Staff', color: '#00e676', emoji: '💊' };
-
+ 
     const avatar = document.querySelector('.counselor-avatar');
     const nameEl = document.querySelector('.counselor-info h4');
     const subtitleEl = document.querySelector('.counselor-info span');
-
+ 
     if (loggedInName) {
       const initials = loggedInName.replace(/^(Dr\.|Er\.|Sh\.)\s*/i, '').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
       if (avatar) {
@@ -852,7 +859,9 @@ window.initOpdDashboard = function() {
         nameEl.innerText = loggedInName.split(' ').slice(0, 2).join(' ');
       }
       
-      const staffId = window.localStorage.getItem('counseling_logged_in_staff') || window.CounselFlow.safeGetItem('counseling_logged_in_staff') || '';
+      const staffId = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function') 
+        ? window.CounselFlow.safeGetItem('counseling_logged_in_staff') 
+        : (window.localStorage.getItem('counseling_logged_in_staff') || '');
       const demoCreds = window.CounselFlow.DEMO_CREDENTIALS || [];
       const currentUser = demoCreds.find(c => c.staffId === staffId);
       const district = currentUser ? currentUser.district : '';
@@ -944,7 +953,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const isLoginPage = window.location.pathname.endsWith('index.html') || window.location.pathname.endsWith('/') || window.location.pathname === '';
 
   // Guard: if token is not present, redirect dedicated pages to login.
-  if (!window.localStorage.getItem('counseling_logged_in_token')) {
+  const checkToken = (window.CounselFlow && typeof window.CounselFlow.safeGetItem === 'function')
+    ? window.CounselFlow.safeGetItem('counseling_logged_in_token')
+    : window.localStorage.getItem('counseling_logged_in_token');
+  if (!checkToken) {
     if (!isLoginPage) {
       window.location.href = 'index.html';
     }

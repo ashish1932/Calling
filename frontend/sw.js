@@ -1,4 +1,4 @@
-const CACHE_NAME = 'counselflow-cache-v2';
+const CACHE_NAME = 'counselflow-cache-v3';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -65,18 +65,38 @@ self.addEventListener('fetch', (event) => {
         })
     );
   } else {
-    // Static assets: Cache first, fallback to network
-    event.respondWith(
-      caches.match(event.request).then((response) => {
-        return response || fetch(event.request).then(fetchRes => {
-          return caches.open(CACHE_NAME).then(cache => {
-            if(event.request.method === 'GET') {
-               cache.put(event.request, fetchRes.clone());
+    // HTML pages & Navigation requests: Network first, fallback to cached response
+    const isNavigation = event.request.mode === 'navigate' || 
+                         url.pathname === '/' || 
+                         url.pathname === '/index.html' || 
+                         url.pathname.endsWith('.html');
+
+    if (isNavigation) {
+      event.respondWith(
+        fetch(event.request)
+          .then((response) => {
+            if (response.status === 200) {
+              const clone = response.clone();
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
             }
-            return fetchRes;
+            return response;
+          })
+          .catch(() => caches.match(event.request))
+      );
+    } else {
+      // Static assets (CSS, JS, Images, Fonts): Cache first, fallback to network
+      event.respondWith(
+        caches.match(event.request).then((response) => {
+          return response || fetch(event.request).then(fetchRes => {
+            return caches.open(CACHE_NAME).then(cache => {
+              if (event.request.method === 'GET') {
+                cache.put(event.request, fetchRes.clone());
+              }
+              return fetchRes;
+            });
           });
-        });
-      })
-    );
+        })
+      );
+    }
   }
 });

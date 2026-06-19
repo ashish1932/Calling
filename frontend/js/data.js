@@ -2,20 +2,100 @@
 
 window.CounselFlow = window.CounselFlow || {};
 
+// Check if localStorage is available and writable
+let isLocalStorageAvailable = false;
+let storageWarningToToast = null;
+try {
+  const testKey = "__storage_test__";
+  window.localStorage.setItem(testKey, testKey);
+  window.localStorage.removeItem(testKey);
+  isLocalStorageAvailable = true;
+} catch (e) {
+  isLocalStorageAvailable = false;
+  console.warn("localStorage is not accessible. Falling back to in-memory session storage.", e);
+  storageWarningToToast = {
+    title: "Storage Unobtainable",
+    message: "LocalStorage is blocked or unavailable (e.g. in Private mode). Patient data edits will be temporary for this session.",
+    type: "error"
+  };
+}
 
+// In-memory backup database
+const IN_MEMORY_DB = {};
+
+function safeGetItem(key) {
+  if (isLocalStorageAvailable) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (e) {
+      console.error(`Error reading ${key} from localStorage:`, e);
+    }
+  }
+  return IN_MEMORY_DB[key] || null;
+}
+
+function safeSetItem(key, value) {
+  if (isLocalStorageAvailable) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (e) {
+      console.error(`Error writing ${key} to localStorage:`, e);
+      if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) {
+        const title = "Storage Quota Exceeded";
+        const message = "Local storage quota has been exceeded. Patient records are temporarily saved in memory for this session.";
+        if (window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
+          window.CounselFlow.app.showToast(title, message, "error");
+        } else {
+          storageWarningToToast = { title, message, type: "error" };
+        }
+      } else {
+        const title = "Storage Unobtainable";
+        const message = "Unable to write to local storage. Your changes will be lost when you close this window.";
+        if (window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
+          window.CounselFlow.app.showToast(title, message, "error");
+        } else {
+          storageWarningToToast = { title, message, type: "error" };
+        }
+      }
+    }
+  }
+  IN_MEMORY_DB[key] = value;
+  return false;
+}
+
+function safeRemoveItem(key) {
+  if (isLocalStorageAvailable) {
+    try {
+      window.localStorage.removeItem(key);
+      return true;
+    } catch (e) {
+      console.error(`Error removing ${key} from localStorage:`, e);
+    }
+  }
+  delete IN_MEMORY_DB[key];
+  return false;
+}
+
+// Export storage helpers to global namespace
+window.CounselFlow.safeGetItem = safeGetItem;
+window.CounselFlow.safeSetItem = safeSetItem;
+window.CounselFlow.safeRemoveItem = safeRemoveItem;
+window.CounselFlow.getStorageWarning = () => storageWarningToToast;
+window.CounselFlow.clearStorageWarning = () => { storageWarningToToast = null; };
 
 // Centralized Configuration and Environment variables (Architecture #44, Code Quality #7)
 window.CounselFlow.CONFIG = {
   SCHEMA_VERSION: 14,
   ENCRYPTION_KEY: (() => {
     try {
-      let key = window.localStorage.getItem("counseling_encryption_key");
+      let key = safeGetItem("counseling_encryption_key");
       if (!key) {
         // Generate secure 256-bit cryptographically-random key unique to client
         const arr = new Uint8Array(32);
         window.crypto.getRandomValues(arr);
         key = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
-        window.localStorage.setItem("counseling_encryption_key", key);
+        safeSetItem("counseling_encryption_key", key);
       }
       return key;
     } catch (e) {
@@ -55,7 +135,7 @@ window.CounselFlow.ENV = {
   mode: 'production',
   get apiUrl() { return window.CounselFlow.API_BASE; },
   enableMocks: false,
-  wsUrl: 'wss://telecalling.cubegtp.com'
+  wsUrl: window.location.protocol === 'https:' ? 'wss://' + window.location.host : 'ws://' + window.location.host
 };
 
 window.CounselFlow.getSystemSettings = function() {
@@ -259,74 +339,7 @@ async function deobfuscateData(str) {
 window.obfuscateData = obfuscateData;
 window.deobfuscateData = deobfuscateData;
 
-// Check if localStorage is available and writable
-let isLocalStorageAvailable = false;
-let storageWarningToToast = null;
-try {
-  const testKey = "__storage_test__";
-  window.localStorage.setItem(testKey, testKey);
-  window.localStorage.removeItem(testKey);
-  isLocalStorageAvailable = true;
-} catch (e) {
-  isLocalStorageAvailable = false;
-  console.warn("localStorage is not accessible. Falling back to in-memory session storage.", e);
-  storageWarningToToast = {
-    title: "Storage Unobtainable",
-    message: "LocalStorage is blocked or unavailable (e.g. in Private mode). Patient data edits will be temporary for this session.",
-    type: "error"
-  };
-}
-
-// In-memory backup database
-const IN_MEMORY_DB = {};
-
-function safeGetItem(key) {
-  if (isLocalStorageAvailable) {
-    try {
-      return window.localStorage.getItem(key);
-    } catch (e) {
-      console.error(`Error reading ${key} from localStorage:`, e);
-    }
-  }
-  return IN_MEMORY_DB[key] || null;
-}
-
-function safeSetItem(key, value) {
-  if (isLocalStorageAvailable) {
-    try {
-      window.localStorage.setItem(key, value);
-      return true;
-    } catch (e) {
-      console.error(`Error writing ${key} to localStorage:`, e);
-      if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) {
-        const title = "Storage Quota Exceeded";
-        const message = "Local storage quota has been exceeded. Patient records are temporarily saved in memory for this session.";
-        if (window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
-          window.CounselFlow.app.showToast(title, message, "error");
-        } else {
-          storageWarningToToast = { title, message, type: "error" };
-        }
-      } else {
-        const title = "Storage Unobtainable";
-        const message = "Unable to write to local storage. Your changes will be lost when you close this window.";
-        if (window.CounselFlow.app && typeof window.CounselFlow.app.showToast === 'function') {
-          window.CounselFlow.app.showToast(title, message, "error");
-        } else {
-          storageWarningToToast = { title, message, type: "error" };
-        }
-      }
-    }
-  }
-  IN_MEMORY_DB[key] = value;
-  return false;
-}
-
-// Export storage helpers to global namespace
-window.CounselFlow = window.CounselFlow || {};
-window.CounselFlow.safeGetItem = safeGetItem;
-window.CounselFlow.safeSetItem = safeSetItem;
-window.CounselFlow.getStorageWarning = () => storageWarningToToast;
-window.CounselFlow.clearStorageWarning = () => { storageWarningToToast = null; };
+// Storage wrappers moved to top of file
 
 // Centralized Explicit Port Configuration (Issue #16)
 window.CounselFlow.API_BASE = window.location.origin + '/api';
@@ -356,7 +369,7 @@ window.fetch = async function(resource, config) {
       config.headers['ngrok-skip-browser-warning'] = '1';
       config.headers['X-Requested-With'] = 'XMLHttpRequest';
     }
-    const token = window.localStorage.getItem('counseling_logged_in_token');
+    const token = safeGetItem('counseling_logged_in_token');
     if (token && !config.headers['Authorization'] && !config.headers['authorization']) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
@@ -368,10 +381,10 @@ window.fetch = async function(resource, config) {
     const isLoginPage = window.location.pathname.endsWith('index.html') || window.location.pathname.endsWith('/') || window.location.pathname === '';
     if (!isLoginPage) {
       console.warn("Session expired or unauthorized. Logging out.");
-      window.localStorage.removeItem('counseling_active_role');
-      window.localStorage.removeItem('counseling_logged_in_name');
-      window.localStorage.removeItem('counseling_logged_in_staff');
-      window.localStorage.removeItem('counseling_logged_in_token');
+      safeRemoveItem('counseling_active_role');
+      safeRemoveItem('counseling_logged_in_name');
+      safeRemoveItem('counseling_logged_in_staff');
+      safeRemoveItem('counseling_logged_in_token');
       window.location.href = 'index.html';
     }
   }
@@ -382,7 +395,7 @@ window.fetch = async function(resource, config) {
 async function getStoredPatients() {
   // Database is the SINGLE source of truth — no localStorage caching.
   try {
-    const token = window.localStorage.getItem('counseling_logged_in_token');
+    const token = safeGetItem('counseling_logged_in_token');
     const headers = { 'X-Requested-With': 'XMLHttpRequest' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -405,7 +418,7 @@ async function getStoredPatients() {
 async function savePatients(patients) {
   // Database is the SINGLE source of truth — write directly to backend.
   try {
-    const token = window.localStorage.getItem('counseling_logged_in_token');
+    const token = safeGetItem('counseling_logged_in_token');
     const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -428,7 +441,7 @@ async function savePatients(patients) {
 // Atomic single-patient update — avoids stale-write clobbering from full-array saves.
 async function patchPatient(patientId, updates) {
   try {
-    const token = window.localStorage.getItem('counseling_logged_in_token');
+    const token = safeGetItem('counseling_logged_in_token');
     const headers = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -453,7 +466,7 @@ async function patchPatient(patientId, updates) {
 async function deletePatient(id) {
   if (navigator.onLine) {
     try {
-      const token = window.localStorage.getItem('counseling_logged_in_token');
+      const token = safeGetItem('counseling_logged_in_token');
       const headers = { 'X-Requested-With': 'XMLHttpRequest' };
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -695,9 +708,9 @@ async function safeFetch(url, options = {}) {
     return await res.json();
   } catch (error) {
     if (options.method && options.method !== 'GET') {
-      const queue = JSON.parse(localStorage.getItem('offlineQueue') || '[]');
+      const queue = JSON.parse(safeGetItem('offlineQueue') || '[]');
       queue.push({ url, options, timestamp: Date.now() });
-      localStorage.setItem('offlineQueue', JSON.stringify(queue));
+      safeSetItem('offlineQueue', JSON.stringify(queue));
       showToast('Offline Mode: Action queued.', 'warning');
       return { success: true, offline: true };
     }
@@ -707,14 +720,14 @@ async function safeFetch(url, options = {}) {
 
 window.addEventListener('online', async () => {
   showToast('Back online. Syncing data...', 'info');
-  const queue = JSON.parse(localStorage.getItem('offlineQueue') || '[]');
+  const queue = JSON.parse(safeGetItem('offlineQueue') || '[]');
   if (queue.length > 0) {
     for (const item of queue) {
       try {
         await fetch(item.url, item.options);
       } catch(e) { console.warn('Sync failed', e); }
     }
-    localStorage.removeItem('offlineQueue');
+    safeRemoveItem('offlineQueue');
     showToast('Offline actions synced successfully!', 'success');
   }
 });

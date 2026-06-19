@@ -69,7 +69,7 @@ router.post('/patients', authorizeRoles('spo', 'supervisor', 'ditsu', 'ddrc'), a
   }
 });
 
-router.patch('/patients/:id', authorizeRoles('spo', 'supervisor', 'ddrc'), authorizePatientAccess, async (req, res, next) => {
+router.patch('/patients/:id', authorizeRoles('spo', 'supervisor', 'ddrc', 'counsellor'), authorizePatientAccess, async (req, res, next) => {
   try {
     const { id } = req.params;
     const updateData = { ...req.body };
