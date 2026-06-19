@@ -110,7 +110,13 @@ class WebRTCService {
       iceCandidatePoolSize: 10,
     };
     try {
-      const resp = await fetch(`${SERVER_URL}/api/ice-servers`);
+      const headers = {
+        'ngrok-skip-browser-warning': '1',
+      };
+      if (this.authToken) {
+        headers['Authorization'] = `Bearer ${this.authToken}`;
+      }
+      const resp = await fetch(`${SERVER_URL}/api/ice-servers`, { headers });
       if (resp.ok) {
         const data = await resp.json();
         return { iceServers: data.iceServers, iceCandidatePoolSize: data.iceCandidatePoolSize || 10 };
@@ -121,11 +127,12 @@ class WebRTCService {
     return fallback;
   }
 
-  connect(userId, role = 'patient', callbacks) {
+  connect(userId, role = 'patient', callbacks, authToken) {
     this.userId = userId;
     this.role = role;
     this._relayCallbacks = callbacks;
     this._callbacks = callbacks;
+    this.authToken = authToken;
     this.socket = io(SERVER_URL, { transports: ['websocket', 'polling'] });
 
     // Clear old listeners to prevent duplicate events on reconnect

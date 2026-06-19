@@ -18,7 +18,7 @@ router.setFirebase = (firebaseAdmin, isInitialized) => {
 // ICE / TURN SERVER CONFIG
 // ==========================================
 
-router.get('/ice-servers', authorizeRoles('spo', 'counsellor'), (req, res) => {
+router.get('/ice-servers', authorizeRoles('spo', 'counsellor', 'patient'), (req, res) => {
   const iceServers: any[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },

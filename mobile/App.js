@@ -926,7 +926,7 @@ export default function App() {
         stopTimer();
         stopRealLiveTranscription();
       },
-    });
+    }, mobileAuthToken);
   };
 
   const handleStartCall = async () => {
@@ -1299,7 +1299,7 @@ export default function App() {
                             setChatLogs(prev => [...prev, { sender: data.sender, text: data.text }]);
                             setActiveModal('chat');
                           }
-                        });
+                        }, mobileAuthToken);
                         setActiveModal('chat');
                       }}
                     >
