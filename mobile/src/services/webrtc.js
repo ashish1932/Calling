@@ -489,86 +489,20 @@ class WebRTCService {
     }
   }
 
-  // Socket audio relay — records mic and streams audio chunks through the server
-  async startSocketAudioRelay(targetSocket, callbacks) {
+  // Socket audio relay — notifies server and App to begin relay mode.
+  // NOTE: Actual mic recording is done by App.js startRealLiveTranscription()
+  // to avoid Android dual-recording conflicts (only 1 mic session allowed at a time).
+  // App.js relay loop calls webrtcService.sendAudioChunk() to forward audio to the peer.
+  startSocketAudioRelay(targetSocket, callbacks) {
     if (this.isRelayMode) return;
     this.isRelayMode = true;
-    console.log('[Relay] Starting socket audio relay');
+    console.log('[Relay] Starting socket audio relay (mic recording handled by App.js)');
 
     // Tell server to create relay pair
     this.socket.emit('audio-relay-start', { to: targetSocket || this.counselorSocket });
 
     if (callbacks.onRelayStarted) callbacks.onRelayStarted();
-    console.log('[Relay] Socket audio relay active — routing audio through server');
-
-    // Start recording mic and streaming chunks every 2 seconds
-    try {
-      const { Platform } = require('react-native');
-      if (Platform.OS !== 'web') {
-        const { Audio } = require('expo-av');
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          shouldRouteThroughEarpieceAndroid: false,
-          staysActiveInBackground: true,
-        });
-
-        const RELAY_OPTIONS = {
-          android: {
-            extension: '.m4a',
-            outputFormat: 2,   // MPEG_4
-            audioEncoder: 3,   // AAC
-            sampleRate: 16000,
-            numberOfChannels: 1,
-            bitRate: 32000,
-          },
-          ios: {
-            extension: '.m4a',
-            outputFormat: 'm4af',
-            audioQuality: 64,
-            sampleRate: 16000,
-            numberOfChannels: 1,
-            bitRate: 32000,
-          },
-        };
-
-        const self = this;
-        const recordAndStream = async () => {
-          if (!self.isRelayMode) return;
-          let rec = null;
-          try {
-            rec = new Audio.Recording();
-            await rec.prepareToRecordAsync(RELAY_OPTIONS);
-            await rec.startAsync();
-            // Record for 2 seconds per chunk
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            if (!self.isRelayMode) { try { await rec.stopAndUnloadAsync(); } catch(e) {} return; }
-            await rec.stopAndUnloadAsync();
-            const uri = rec.getURI();
-            if (uri && self.isRelayMode && self.socket) {
-              const { FileSystem } = require('expo-file-system');
-              const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
-              // Convert base64 to ArrayBuffer
-              const binary = atob(base64);
-              const bytes = new Uint8Array(binary.length);
-              for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-              self.socket.emit('audio-chunk', bytes.buffer);
-            }
-          } catch (err) {
-            console.warn('[Relay] Relay chunk error:', err.message);
-            if (rec) { try { await rec.stopAndUnloadAsync(); } catch(e) {} }
-          }
-          // Chain next chunk
-          if (self.isRelayMode) setTimeout(recordAndStream, 100);
-        };
-
-        this._relayRecordLoop = recordAndStream;
-        recordAndStream();
-        console.log('[Relay] Mic streaming loop started');
-      }
-    } catch (e) {
-      console.warn('[Relay] Could not start relay mic recording:', e.message);
-    }
+    console.log('[Relay] Socket audio relay active — App.js will stream mic audio via sendAudioChunk()');
   }
 
   // Send a binary audio chunk

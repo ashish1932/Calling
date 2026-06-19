@@ -547,6 +547,20 @@ export default function App() {
             // Transcribe the completed chunk asynchronously
             if (uri && transcriptionLoopIdRef.current === currentLoopId) {
               processAudioChunk(uri, currentLoopId, maxDb);
+
+              // Also relay the same audio chunk to the counselor if in relay mode
+              if (webrtcService.isRelayMode && webrtcService.socket && webrtcService.socket.connected) {
+                try {
+                  const { FileSystem } = require('expo-file-system');
+                  const base64 = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+                  const binary = atob(base64);
+                  const bytes = new Uint8Array(binary.length);
+                  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                  webrtcService.sendAudioChunk(bytes.buffer);
+                } catch (relayErr) {
+                  console.warn('[ASR] Failed to relay audio chunk:', relayErr.message);
+                }
+              }
             }
           } catch (err) {
             logErrorToServer("Native recording chunk failed", err);
