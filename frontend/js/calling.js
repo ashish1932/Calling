@@ -787,6 +787,15 @@ class CallManager {
     this.relayAudioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
     this.relayNextPlayTime = this.relayAudioCtx.currentTime;
 
+    // Create a MediaStreamDestination so we can wire up STT to relay audio
+    let relaySTTStarted = false;
+    let relayStreamDest = null;
+    try {
+      relayStreamDest = this.relayAudioCtx.createMediaStreamDestination();
+    } catch(e) {
+      console.warn('[Relay] Could not create MediaStreamDestination for STT:', e);
+    }
+
     // Add unlock handler for relay audio
     const unlockRelayAudio = () => {
       // Resume audio context if it's suspended
@@ -810,6 +819,16 @@ class CallManager {
         const source = this.relayAudioCtx.createBufferSource();
         source.buffer = audioBuf;
         source.connect(this.relayAudioCtx.destination);
+        // Also route to STT stream destination
+        if (relayStreamDest) {
+          source.connect(relayStreamDest);
+          // Start Sarvam STT for Patient on first chunk
+          if (!relaySTTStarted) {
+            relaySTTStarted = true;
+            this.setupStreamingSTT(relayStreamDest.stream, 'Patient');
+            console.log('[Relay] STT started for relay Patient audio');
+          }
+        }
         // Gapless playback scheduling
         const now = this.relayAudioCtx.currentTime;
         const startAt = Math.max(now, this.relayNextPlayTime);

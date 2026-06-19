@@ -887,11 +887,55 @@ export default function App() {
         console.log('[App] Socket relay mode active');
         setIsRelayMode(true);
         setStatusMsg('Audio connected via server relay');
+        // Configure audio for simultaneous record + playback via speaker
+        try {
+          const { Audio } = require('expo-av');
+          Audio.setAudioModeAsync({
+            allowsRecordingIOS: true,
+            playsInSilentModeIOS: true,
+            shouldRouteThroughEarpieceAndroid: false,
+            staysActiveInBackground: true,
+            playThroughEarpieceAndroid: false,
+          }).catch(e => console.warn('[Relay] Audio mode set failed:', e.message));
+        } catch(e) {}
         startRealLiveTranscription();
       },
 
-      onRelayAudioChunk: (data) => {
-        // Handled natively
+      onRelayAudioChunk: async (data) => {
+        // Play received relay audio using expo-av
+        try {
+          const { Audio } = require('expo-av');
+          const { FileSystem } = require('expo-file-system');
+          // data arrives as ArrayBuffer from server
+          let bytes;
+          if (data instanceof ArrayBuffer) {
+            bytes = new Uint8Array(data);
+          } else if (data && data.buffer) {
+            bytes = new Uint8Array(data.buffer);
+          } else {
+            return; // unsupported format
+          }
+          // Convert to base64 to write to file
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) {
+            binary += String.fromCharCode(bytes[i]);
+          }
+          const base64 = btoa(binary);
+          const tmpUri = FileSystem.cacheDirectory + `relay_chunk_${Date.now()}.m4a`;
+          await FileSystem.writeAsStringAsync(tmpUri, base64, { encoding: FileSystem.EncodingType.Base64 });
+          const { sound } = await Audio.Sound.createAsync(
+            { uri: tmpUri },
+            { shouldPlay: true, volume: 1.0 }
+          );
+          sound.setOnPlaybackStatusUpdate(async (status) => {
+            if (status.didJustFinish) {
+              try { await sound.unloadAsync(); } catch(e) {}
+              try { await FileSystem.deleteAsync(tmpUri, { idempotent: true }); } catch(e) {}
+            }
+          });
+        } catch (e) {
+          console.warn('[Relay] Failed to play audio chunk:', e.message);
+        }
       },
 
       onCallEnded: () => {
