@@ -12,7 +12,7 @@ on:
         description: 'Target VM Host/IP'
         required: false
         type: string
-        default: '192.168.1.55'
+        default: '192.168.1.38'
       vm_user:
         description: 'Target VM SSH User'
         required: false
@@ -20,7 +20,7 @@ on:
         default: 'cubeai'
 
 env:
-  VM_HOST: ${{ github.event.inputs.vm_host || secrets.VM_HOST || '192.168.1.55' }}
+  VM_HOST: ${{ github.event.inputs.vm_host || secrets.VM_HOST || '192.168.1.38' }}
   VM_USER: ${{ github.event.inputs.vm_user || secrets.VM_USER || 'cubeai' }}
   VM_APP_DIR: ${{ secrets.VM_APP_DIR || '/home/cubeai/punjab-voice-app' }}
   BACKEND_IMAGE: casdevops/punjab-voice-backend

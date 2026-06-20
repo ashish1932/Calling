@@ -10,7 +10,7 @@ jobs:
     name: Build Android Release APK
     runs-on: ubuntu-latest
     env:
-      EXPO_PUBLIC_SERVER_URL: https://zoology-collector-unelected.ngrok-free.dev
+      EXPO_PUBLIC_SERVER_URL: https://telecalling.cubegtp.com
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
