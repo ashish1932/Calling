@@ -16,7 +16,7 @@ pipeline {
 
         // ── VM Deployment Target ────────────────────────────────────────────
         VM_USER    = "cubeai"
-        VM_HOST    = "192.168.1.49"
+        VM_HOST    = "192.168.1.38"
         VM_APP_DIR = "/home/cubeai/punjab-voice-app"
 
         // ── Git Configuration ───────────────────────────────────────────────

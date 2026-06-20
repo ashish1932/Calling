@@ -199,7 +199,7 @@ router.delete('/counselors/:id', authorizeRoles('spo'), async (req, res, next) =
 // CALL LOGS CRUD
 // ==========================================
 
-router.get('/call-logs', authorizeRoles('spo', 'supervisor', 'counsellor', 'ditsu'), async (req, res, next) => {
+router.get('/call-logs', authorizeRoles('spo', 'supervisor', 'counsellor', 'ddrc', 'ditsu', 'opd_staff'), async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 1000;
@@ -222,7 +222,7 @@ router.get('/call-logs', authorizeRoles('spo', 'supervisor', 'counsellor', 'dits
   }
 });
 
-router.post('/call-logs', authorizeRoles('spo', 'counsellor', 'supervisor'), async (req, res, next) => {
+router.post('/call-logs', authorizeRoles('spo', 'counsellor', 'supervisor', 'ddrc'), async (req, res, next) => {
   try {
     const logs = req.body;
     if (!Array.isArray(logs)) {

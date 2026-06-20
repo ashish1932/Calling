@@ -63,7 +63,7 @@ const getServerUrl = () => {
     return process.env.EXPO_PUBLIC_SERVER_URL;
   }
   console.warn('⚠️ EXPO_PUBLIC_SERVER_URL is not set! Falling back to production URL.');
-  return 'https://zoology-collector-unelected.ngrok-free.dev';
+  return 'https://telecalling.cubegtp.com';
 };
 
 export let SERVER_URL = getServerUrl();

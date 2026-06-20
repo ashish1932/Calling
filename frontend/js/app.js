@@ -2602,11 +2602,11 @@ class AppController {
     if (fieldGroup) fieldGroup.style.display = 'block';
 
     // Toggle required on visible inputs only
-    document.querySelectorAll('.emr-field-group input[required], .emr-field-group select[required]').forEach(el => {
+    document.querySelectorAll('.emr-field-group input[required], .emr-field-group select[required], .emr-field-group textarea[required]').forEach(el => {
       el.required = false;
     });
     if (fieldGroup) {
-      fieldGroup.querySelectorAll('input[type="text"], input[type="number"]').forEach(el => {
+      fieldGroup.querySelectorAll('input[type="text"], input[type="number"], textarea').forEach(el => {
         if (el.id !== 'emr-cows-severity') el.required = true;
       });
     }

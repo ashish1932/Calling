@@ -1347,7 +1347,6 @@ header {
 }
 
 .chart-bar {
-  fill: url(#bar-grad);
   rx: 4;
   transition: height 0.5s ease, y 0.5s ease;
   cursor: pointer;

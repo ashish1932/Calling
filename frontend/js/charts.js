@@ -81,7 +81,8 @@ class ChartRenderer {
     // Create defs gradient
     const defs = document.createElementNS(svgNS, "defs");
     const grad = document.createElementNS(svgNS, "linearGradient");
-    grad.setAttribute("id", "bar-grad");
+    const gradId = `bar-grad-${containerId}`;
+    grad.setAttribute("id", gradId);
     grad.setAttribute("x1", "0");
     grad.setAttribute("y1", "0");
     grad.setAttribute("x2", "0");
@@ -139,7 +140,7 @@ class ChartRenderer {
       rect.setAttribute("y", y.toString());
       rect.setAttribute("width", barWidth.toString());
       rect.setAttribute("height", valHeight.toString());
-      rect.setAttribute("fill", "url(#bar-grad)");
+      rect.setAttribute("fill", `url(#${gradId})`);
       rect.setAttribute("rx", "4");
       rect.style.cursor = "pointer";
       rect.addEventListener("click", () => {

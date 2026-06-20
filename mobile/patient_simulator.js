@@ -1,7 +1,7 @@
 const { io } = require('socket.io-client');
 
-// The active ngrok server URL
-const SERVER_URL = 'https://altitude-quintuple-compile.ngrok-free.dev';
+// The active deployed server URL
+const SERVER_URL = 'https://telecalling.cubegtp.com';
 const PATIENT_ID = 'PT-LAMA-01'; // Matches 'Daljit Singh' in the dashboard
 
 console.log(`Connecting to signaling server at: ${SERVER_URL} as ${PATIENT_ID}...`);

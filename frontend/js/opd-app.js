@@ -446,15 +446,19 @@ window.initOpdDashboard = function() {
             `;
             patientVerifyResult.style.display = 'block';
           }
+          await loadHistory();
         } else {
           if (patientVerifyResult) {
             patientVerifyResult.innerHTML = `<div style="color: var(--accent-red);">${data.error || 'Patient not found.'} If walk-in, please register first.</div>`;
             patientVerifyResult.style.display = 'block';
           }
           currentVerifiedPatient = null;
+          await loadHistory();
         }
       } catch (err) {
         showAlert('Verification failed', true);
+        currentVerifiedPatient = null;
+        await loadHistory();
       } finally {
         btnVerifyPatient.textContent = 'Verify';
       }
@@ -542,6 +546,8 @@ window.initOpdDashboard = function() {
         const resData = await res.json(); const data = Array.isArray(resData) ? resData : (resData.data || resData);
         if (res.ok) {
           showAlert('Medicine dispensed successfully!');
+          // Snapshot the patient BEFORE clearing, so loadHistory can still fetch their log
+          const dispensedPatient = currentVerifiedPatient;
           e.target.reset();
           currentVerifiedPatient = null;
           if (patientVerifyResult) patientVerifyResult.style.display = 'none';
@@ -550,7 +556,7 @@ window.initOpdDashboard = function() {
           if (sigStatus) sigStatus.style.display = 'none';
           
           loadMedicinesForDropdown();
-          loadHistory();
+          loadHistory(dispensedPatient);
         } else {
           throw new Error(data.error || 'Failed to dispense');
         }
@@ -563,15 +569,22 @@ window.initOpdDashboard = function() {
     });
   }
 
-  const loadHistory = async () => {
-     // Mocking recent history by fetching queue or patient history
-     // Actually we don't have a global history endpoint, only /api/opd/logs/:patientId
-     // For demo purposes, we will leave it empty unless we want to query a specific patient.
+  // patientOverride allows loadHistory to be called with an explicit patient
+  // even after currentVerifiedPatient has been cleared (e.g. right after dispense).
+  const loadHistory = async (patientOverride) => {
      const tbody = document.getElementById('history-tbody');
-     if (currentVerifiedPatient) {
+     if (!tbody) return;
+     const patient = patientOverride || currentVerifiedPatient;
+     if (patient) {
+       tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--text-muted);">Loading history...</td></tr>';
        try {
-         const res = await fetch(`${API_URL}/opd/logs/${currentVerifiedPatient.id}`, { headers: getAuthHeaders() });
-         const resData = await res.json(); const logs = Array.isArray(resData) ? resData : (resData.data || []);
+         const res = await fetch(`${API_URL}/opd/logs/${patient.id}`, { headers: getAuthHeaders() });
+         const resData = await res.json();
+         const logs = Array.isArray(resData) ? resData : (resData.data || []);
+         if (logs.length === 0) {
+           tbody.innerHTML = '<tr><td colspan="5" style="padding: 20px; text-align: center; color: var(--text-muted);">No dispensing records found for this patient.</td></tr>';
+           return;
+         }
          tbody.innerHTML = '';
          logs.forEach(log => {
            tbody.innerHTML += `
@@ -584,7 +597,9 @@ window.initOpdDashboard = function() {
              </tr>
            `;
          });
-       } catch (e) {}
+       } catch (e) {
+         tbody.innerHTML = '<tr><td colspan="5" style="padding: 16px; text-align: center; color: var(--accent-red);">Failed to load history. Please try again.</td></tr>';
+       }
      } else {
        tbody.innerHTML = '<tr><td colspan="5" style="padding: 20px; text-align: center; color: var(--text-muted);">Verify a patient to see their history</td></tr>';
      }
